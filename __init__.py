@@ -81,7 +81,10 @@ def _run_deploy_background():
             [modal_cmd, "deploy", _COMFYAPP_PATH],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         if result.returncode == 0:
             version = _get_comfyapp_version()
