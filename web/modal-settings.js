@@ -320,17 +320,40 @@ function buildAuthPanel(onConnected) {
   `;
   wrap.appendChild(steps);
 
-  const tokenIdInput = document.createElement("input");
-  tokenIdInput.type = "text";
-  tokenIdInput.placeholder = "Token ID  (ak-...)";
-  tokenIdInput.style.cssText = inputStyle();
-  wrap.appendChild(tokenIdInput);
+  const pasteHint = document.createElement("div");
+  pasteHint.style.cssText = "font-size:11px; color:#888; line-height:1.5;";
+  pasteHint.innerHTML = `You can paste the full command directly:<br><span style="color:#666; font-family:monospace;">modal token set --token-id ak-... --token-secret as-...</span>`;
+  wrap.appendChild(pasteHint);
+
+  const pasteInput = document.createElement("input");
+  pasteInput.type = "text";
+  pasteInput.placeholder = "Paste full command or Token ID (ak-...)";
+  pasteInput.style.cssText = inputStyle();
+  wrap.appendChild(pasteInput);
 
   const tokenSecretInput = document.createElement("input");
   tokenSecretInput.type = "password";
-  tokenSecretInput.placeholder = "Token Secret  (as-...)";
+  tokenSecretInput.placeholder = "Token Secret  (as-...)  — auto-filled if pasted above";
   tokenSecretInput.style.cssText = inputStyle();
   wrap.appendChild(tokenSecretInput);
+
+  function tryParseCommand(val) {
+    const idMatch = val.match(/--token-id\s+(ak-\S+)/);
+    const secretMatch = val.match(/--token-secret\s+(as-\S+)/);
+    if (idMatch && secretMatch) {
+      pasteInput.value = idMatch[1];
+      tokenSecretInput.value = secretMatch[1];
+      return true;
+    }
+    return false;
+  }
+  pasteInput.addEventListener("input", () => tryParseCommand(pasteInput.value));
+  pasteInput.addEventListener("paste", (e) => {
+    const pasted = (e.clipboardData || window.clipboardData).getData("text");
+    if (tryParseCommand(pasted)) e.preventDefault();
+  });
+
+  const tokenIdInput = { get value() { return pasteInput.value; } };
 
   const errorEl = document.createElement("div");
   errorEl.style.cssText = "font-size:11px; color:#e05050; min-height:14px;";
@@ -340,7 +363,7 @@ function buildAuthPanel(onConnected) {
   connectBtn.textContent = "Connect & Deploy";
   connectBtn.style.cssText = btnStyle("primary");
   connectBtn.onclick = async () => {
-    const token_id = tokenIdInput.value.trim();
+    const token_id = pasteInput.value.trim();
     const token_secret = tokenSecretInput.value.trim();
     errorEl.textContent = "";
     if (!token_id || !token_secret) {
@@ -435,7 +458,23 @@ function buildPanel() {
     setTimeout(() => { redeployBtn.disabled = false; }, 3000);
   };
 
+  const reimportKeyBtn = document.createElement("button");
+  reimportKeyBtn.textContent = "🔑 API Key";
+  reimportKeyBtn.title = "Re-enter Modal API key";
+  reimportKeyBtn.style.cssText = btnStyle() + "flex-shrink:0;";
+  reimportKeyBtn.onclick = () => {
+    const container = panel.parentElement;
+    if (!container) return;
+    container.innerHTML = "";
+    container.appendChild(buildAuthPanel(() => {
+      container.innerHTML = "";
+      container.appendChild(buildPanel());
+      startDeployPoll();
+    }));
+  };
+
   headerRow.appendChild(title);
+  headerRow.appendChild(reimportKeyBtn);
   headerRow.appendChild(redeployBtn);
   headerRow.appendChild(toggleLabel);
   panel.appendChild(headerRow);
