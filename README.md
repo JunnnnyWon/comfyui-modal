@@ -29,14 +29,49 @@ No need to manage servers or pay for idle time. Modal spins up a GPU container o
 
 ## Installation
 
-### 1. Clone into ComfyUI custom nodes
+### Option A — Windows Portable (recommended for Windows users)
+
+The Windows portable package ships its own isolated Python (`python_embeded`). You must install `modal` into that Python, not your system Python.
+
+**1. Download and extract ComfyUI Windows portable**
+
+Get it from [ComfyUI releases](https://github.com/comfyanonymous/ComfyUI/releases) and extract to a folder such as `C:\ComfyUI_windows_portable\`.
+
+**2. Clone this repo into custom_nodes**
+
+Open Command Prompt and run:
+
+```bat
+cd C:\ComfyUI_windows_portable\ComfyUI\custom_nodes
+git clone https://github.com/JunnnnyWon/comfyui-modal
+```
+
+> If you don't have `git`, download the ZIP from GitHub and extract it as `comfyui-modal` inside `custom_nodes`.
+
+**3. Install modal into the embedded Python**
+
+```bat
+C:\ComfyUI_windows_portable\python_embeded\python.exe -m pip install modal
+```
+
+**4. Start ComfyUI**
+
+Double-click `run_nvidia_gpu.bat` (or `run_cpu.bat`).
+
+The **Modal GPU** tab will appear in the sidebar.
+
+---
+
+### Option B — Standard install (Mac / Linux / Windows venv)
+
+**1. Clone into ComfyUI custom nodes**
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
 git clone https://github.com/JunnnnyWon/comfyui-modal
 ```
 
-### 2. Install the modal package
+**2. Install the modal package**
 
 Install `modal` into the **same Python environment that runs ComfyUI**:
 
@@ -44,12 +79,7 @@ Install `modal` into the **same Python environment that runs ComfyUI**:
 pip install modal
 ```
 
-> On portable ComfyUI (Windows), use the embedded Python:
-> ```
-> python_embeded\python.exe -m pip install modal
-> ```
-
-### 3. Start ComfyUI
+**3. Start ComfyUI**
 
 ```bash
 python main.py

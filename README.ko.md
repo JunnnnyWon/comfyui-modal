@@ -29,14 +29,49 @@
 
 ## 설치
 
-### 1. ComfyUI custom nodes 디렉토리에 클론
+### 방법 A — Windows 포터블 (Windows 사용자 권장)
+
+Windows 포터블 패키지는 자체 격리된 Python(`python_embeded`)을 포함합니다. 시스템 Python이 아닌 해당 Python에 `modal`을 설치해야 합니다.
+
+**1. ComfyUI Windows 포터블 다운로드 및 압축 해제**
+
+[ComfyUI 릴리즈](https://github.com/comfyanonymous/ComfyUI/releases)에서 다운로드 후 `C:\ComfyUI_windows_portable\` 등의 폴더에 압축을 해제합니다.
+
+**2. custom_nodes에 이 저장소 클론**
+
+명령 프롬프트(CMD)를 열고 실행합니다:
+
+```bat
+cd C:\ComfyUI_windows_portable\ComfyUI\custom_nodes
+git clone https://github.com/JunnnnyWon/comfyui-modal
+```
+
+> `git`이 없다면 GitHub에서 ZIP을 다운로드해 `custom_nodes` 안에 `comfyui-modal` 폴더로 압축 해제하세요.
+
+**3. 내장 Python에 modal 설치**
+
+```bat
+C:\ComfyUI_windows_portable\python_embeded\python.exe -m pip install modal
+```
+
+**4. ComfyUI 시작**
+
+`run_nvidia_gpu.bat` (또는 `run_cpu.bat`)을 더블클릭합니다.
+
+사이드바에 **Modal GPU** 탭이 나타납니다.
+
+---
+
+### 방법 B — 일반 설치 (Mac / Linux / Windows venv)
+
+**1. ComfyUI custom nodes 디렉토리에 클론**
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
 git clone https://github.com/JunnnnyWon/comfyui-modal
 ```
 
-### 2. modal 패키지 설치
+**2. modal 패키지 설치**
 
 **ComfyUI를 실행하는 Python 환경**에 `modal`을 설치합니다:
 
@@ -44,12 +79,7 @@ git clone https://github.com/JunnnnyWon/comfyui-modal
 pip install modal
 ```
 
-> Windows 포터블 ComfyUI 사용 시, 내장 Python을 사용하세요:
-> ```
-> python_embeded\python.exe -m pip install modal
-> ```
-
-### 3. ComfyUI 시작
+**3. ComfyUI 시작**
 
 ```bash
 python main.py
