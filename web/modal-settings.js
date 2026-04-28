@@ -83,11 +83,25 @@ function setStatus(s) {
   statusEl.textContent = label;
 }
 
-async function checkHealth() {
+async function checkHealth(ping = false) {
   setStatus(STATUS.CHECKING);
   try {
-    const resp = await api.fetchApi(`${MODAL_PREFIX}/health`);
-    setStatus(resp.ok ? STATUS.ONLINE : STATUS.OFFLINE);
+    const url = ping
+      ? `${MODAL_PREFIX}/health?mode=ping`
+      : `${MODAL_PREFIX}/health?mode=deploy`;
+    const resp = await api.fetchApi(url);
+    if (resp.ok) {
+      const data = await resp.json();
+      setStatus(data.status === "ok" ? STATUS.ONLINE : STATUS.OFFLINE);
+    } else {
+      const data = await resp.json().catch(() => ({}));
+      if (data.status === "deploying") {
+        setStatus(STATUS.CHECKING);
+        statusEl.textContent = "Deploying...";
+      } else {
+        setStatus(STATUS.OFFLINE);
+      }
+    }
   } catch {
     setStatus(STATUS.OFFLINE);
   }
@@ -529,12 +543,26 @@ function buildPanel() {
 
   const checkBtn = document.createElement("button");
   checkBtn.textContent = "Check";
+  checkBtn.title = "Check if Modal app is deployed (instant)";
   checkBtn.style.cssText = btnStyle();
-  checkBtn.onclick = checkHealth;
+  checkBtn.onclick = () => checkHealth(false);
+
+  const pingBtn = document.createElement("button");
+  pingBtn.textContent = "Ping";
+  pingBtn.title = "Wake up Modal container and confirm it's alive (may take 1-3 min on cold start)";
+  pingBtn.style.cssText = btnStyle();
+  pingBtn.onclick = async () => {
+    pingBtn.disabled = true;
+    pingBtn.textContent = "Pinging...";
+    await checkHealth(true);
+    pingBtn.disabled = false;
+    pingBtn.textContent = "Ping";
+  };
 
   gpuRow.appendChild(dotEl);
   gpuRow.appendChild(statusEl);
   gpuRow.appendChild(checkBtn);
+  gpuRow.appendChild(pingBtn);
   panel.appendChild(gpuRow);
 
   const hr = document.createElement("div");

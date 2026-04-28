@@ -446,9 +446,20 @@ if _server:
 
     @_server.routes.get("/comfymodal/health")
     async def modal_health(request: web.Request) -> web.Response:
+        mode = request.rel_url.query.get("mode", "deploy")
+        if mode == "deploy":
+            state = _deploy_status.get("state", "idle")
+            if state == "ready":
+                return web.json_response({"status": "ok", "mode": "deploy"})
+            elif state == "deploying":
+                return web.json_response({"status": "deploying"}, status=503)
+            else:
+                return web.json_response({"status": state, "message": _deploy_status.get("message", "")}, status=503)
         try:
-            result = await health_check()
+            result = await asyncio.wait_for(health_check(), timeout=10)
             return web.json_response(result)
+        except asyncio.TimeoutError:
+            return web.json_response({"status": "error", "message": "timeout"}, status=503)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=503)
 
