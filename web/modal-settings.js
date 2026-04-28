@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 
 const MODAL_PREFIX = "/comfymodal";
 
-const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "diffusion_models", "text_encoders", "unet"];
+const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "diffusion_models", "text_encoders"];
 
 const GPU_OPTIONS = [
   { value: "a10g",  label: "A10G  (24 GB) — recommended" },
@@ -213,7 +213,7 @@ function renderModelList(data) {
             const r = await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ folder, filename: file.name }),
+              body: JSON.stringify({ folder: file.folder ?? folder, filename: file.name }),
             });
             const result = await r.json();
             if (result.status === "ok") {
