@@ -161,6 +161,8 @@ Restart ComfyUI. If `comfyapp.py` changed, the new version deploys automatically
 
 ## Troubleshooting
 
+### Quick reference
+
 | Issue | Fix |
 |-------|-----|
 | **modal CLI not found** | `pip install modal` in ComfyUI's Python environment |
@@ -168,6 +170,118 @@ Restart ComfyUI. If `comfyapp.py` changed, the new version deploys automatically
 | **Deploy timed out** | Click ↑ Deploy to retry |
 | **503 on Models** | App not deployed yet — click ↑ Deploy |
 | **Prompts not going to Modal** | Check the Modal ON toggle in the sidebar |
+| **Model not showing in node dropdowns** | Click ⬇L next to the model, or re-download — placeholder is now auto-created |
+| **unet_name dropdown empty** | Download the model via Add Model — `unet` folder is supported |
+
+---
+
+### Known issues & fixes
+
+#### Windows: `cp949` codec error during deploy
+
+**Symptom**
+```
+[comfyui-modal] Deploy failed: 'cp949' codec can't encode character '\u2713'
+```
+
+**Cause**
+Windows CMD/PowerShell defaults to `cp949` encoding. Modal CLI outputs Unicode characters (e.g. `✓`) that cannot be decoded.
+
+**Fix**
+Already patched in v1.0.0+. If you see this error, update the node:
+```bat
+cd ComfyUI\custom_nodes\comfyui-modal
+git pull
+```
+
+---
+
+#### Check button always shows Offline after deploy
+
+**Symptom**
+Deploy succeeds, but clicking **Check** always shows `Offline`.
+
+**Cause**
+`min_containers=0` means the Modal container is shut down when idle. The old Check button tried to wake the container and timed out before getting a response.
+
+**Fix**
+Already patched. The **Check** button now verifies deploy state instantly (no container wake-up). Use **Ping** when you want to confirm the container is actually alive — this may take 1–3 minutes on a cold start.
+
+---
+
+#### Container shuts down immediately after generation
+
+**Expected behavior**
+`scaledown_window=2` is intentional — the container shuts down 2 seconds after the last request to minimize cost. The next generation will cold-start again (1–3 min).
+
+If you want the container to stay warm longer, edit `comfyapp.py`:
+```python
+scaledown_window=120,  # stay alive 2 minutes after last request
+```
+Then click **↑ Deploy** to redeploy.
+
+---
+
+#### Model URL causes "missing http:// or https://" error
+
+**Symptom**
+```
+Error: Request URL is missing an 'http://' or 'https://' protocol.
+```
+
+**Cause**
+URL was pasted without the `https://` prefix.
+
+**Fix**
+Already patched. The URL field now auto-prepends `https://` if missing. Update the node with `git pull`.
+
+---
+
+#### unet_name / model dropdown empty after download
+
+**Cause**
+Modal Volume models are stored in the cloud. ComfyUI's local file scanner cannot see them.
+
+**Fix**
+A zero-byte placeholder file (`modal-<filename>`) is automatically created in the local `models/` directory after each download. This makes the model appear in ComfyUI dropdowns.
+
+If a placeholder is missing, click **⬇L** next to the model in the Models list to create it manually.
+
+---
+
+### Uninstalling
+
+Removing the custom node folder does **not** automatically clean up placeholder files. To fully uninstall:
+
+**1. Remove placeholder files**
+
+```bash
+# Mac / Linux
+find /path/to/ComfyUI/models -name "modal-*" -delete
+
+# Windows (PowerShell)
+Get-ChildItem -Path "C:\ComfyUI_windows_portable\ComfyUI\models" -Recurse -Filter "modal-*" | Remove-Item
+```
+
+**2. Remove the custom node**
+
+```bash
+rm -rf /path/to/ComfyUI/custom_nodes/comfyui-modal
+```
+
+**3. (Optional) Remove Modal token**
+
+```bash
+# Mac / Linux
+rm ~/.modal.toml
+
+# Windows
+del %USERPROFILE%\.modal.toml
+```
+
+**4. (Optional) Delete Modal cloud resources**
+
+Go to [modal.com](https://modal.com) → Apps → delete `comfyui`, and Volumes → delete `comfyui-models`.
 
 ---
 
