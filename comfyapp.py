@@ -294,7 +294,7 @@ class ComfyAPI:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
@@ -447,7 +447,7 @@ class ComfyAPI_A100:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
@@ -600,7 +600,7 @@ class ComfyAPI_T4:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
