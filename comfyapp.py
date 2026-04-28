@@ -8,7 +8,7 @@ import modal
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.0.0"
+COMFYAPP_VERSION = "1.0.1"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -294,7 +294,7 @@ class ComfyAPI:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
@@ -305,8 +305,15 @@ class ComfyAPI:
             for fname in sorted(os.listdir(folder_path)):
                 fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    files.append({"name": fname, "size": os.path.getsize(fpath)})
+                    files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
+        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
+        unet_path = os.path.join(MODELS_PATH, "unet")
+        if os.path.isdir(unet_path):
+            for fname in sorted(os.listdir(unet_path)):
+                fpath = os.path.join(unet_path, fname)
+                if os.path.isfile(fpath):
+                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
         return result
 
     @modal.method()
@@ -447,7 +454,7 @@ class ComfyAPI_A100:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
@@ -458,8 +465,15 @@ class ComfyAPI_A100:
             for fname in sorted(os.listdir(folder_path)):
                 fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    files.append({"name": fname, "size": os.path.getsize(fpath)})
+                    files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
+        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
+        unet_path = os.path.join(MODELS_PATH, "unet")
+        if os.path.isdir(unet_path):
+            for fname in sorted(os.listdir(unet_path)):
+                fpath = os.path.join(unet_path, fname)
+                if os.path.isfile(fpath):
+                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
         return result
 
     @modal.method()
@@ -600,7 +614,7 @@ class ComfyAPI_T4:
     def list_models(self):
         import os
         folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders", "unet"]
+                   "embeddings", "clip", "diffusion_models", "text_encoders"]
         result = {}
         for folder in folders:
             folder_path = os.path.join(MODELS_PATH, folder)
@@ -611,8 +625,15 @@ class ComfyAPI_T4:
             for fname in sorted(os.listdir(folder_path)):
                 fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    files.append({"name": fname, "size": os.path.getsize(fpath)})
+                    files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
+        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
+        unet_path = os.path.join(MODELS_PATH, "unet")
+        if os.path.isdir(unet_path):
+            for fname in sorted(os.listdir(unet_path)):
+                fpath = os.path.join(unet_path, fname)
+                if os.path.isfile(fpath):
+                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
         return result
 
     @modal.method()
