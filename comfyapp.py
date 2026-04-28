@@ -8,7 +8,7 @@ import modal
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.0.1"
+COMFYAPP_VERSION = "1.0.2"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -293,10 +293,11 @@ class ComfyAPI:
     @modal.method()
     def list_models(self):
         import os
-        folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+        # Standalone folders shown as their own sections
+        solo_folders = ["loras", "vae", "controlnet", "upscale_models",
+                        "embeddings", "clip", "text_encoders"]
         result = {}
-        for folder in folders:
+        for folder in solo_folders:
             folder_path = os.path.join(MODELS_PATH, folder)
             if not os.path.isdir(folder_path):
                 result[folder] = []
@@ -307,13 +308,18 @@ class ComfyAPI:
                 if os.path.isfile(fpath):
                     files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
-        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
-        unet_path = os.path.join(MODELS_PATH, "unet")
-        if os.path.isdir(unet_path):
-            for fname in sorted(os.listdir(unet_path)):
-                fpath = os.path.join(unet_path, fname)
+        # Checkpoint-family folders all shown under "checkpoints" in the sidebar,
+        # but each file carries its real "folder" so inject/delete uses the right path.
+        checkpoint_family = ["checkpoints", "diffusion_models", "unet"]
+        result["checkpoints"] = []
+        for folder in checkpoint_family:
+            folder_path = os.path.join(MODELS_PATH, folder)
+            if not os.path.isdir(folder_path):
+                continue
+            for fname in sorted(os.listdir(folder_path)):
+                fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
+                    result["checkpoints"].append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
         return result
 
     @modal.method()
@@ -453,10 +459,11 @@ class ComfyAPI_A100:
     @modal.method()
     def list_models(self):
         import os
-        folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+        # Standalone folders shown as their own sections
+        solo_folders = ["loras", "vae", "controlnet", "upscale_models",
+                        "embeddings", "clip", "text_encoders"]
         result = {}
-        for folder in folders:
+        for folder in solo_folders:
             folder_path = os.path.join(MODELS_PATH, folder)
             if not os.path.isdir(folder_path):
                 result[folder] = []
@@ -467,13 +474,18 @@ class ComfyAPI_A100:
                 if os.path.isfile(fpath):
                     files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
-        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
-        unet_path = os.path.join(MODELS_PATH, "unet")
-        if os.path.isdir(unet_path):
-            for fname in sorted(os.listdir(unet_path)):
-                fpath = os.path.join(unet_path, fname)
+        # Checkpoint-family folders all shown under "checkpoints" in the sidebar,
+        # but each file carries its real "folder" so inject/delete uses the right path.
+        checkpoint_family = ["checkpoints", "diffusion_models", "unet"]
+        result["checkpoints"] = []
+        for folder in checkpoint_family:
+            folder_path = os.path.join(MODELS_PATH, folder)
+            if not os.path.isdir(folder_path):
+                continue
+            for fname in sorted(os.listdir(folder_path)):
+                fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
+                    result["checkpoints"].append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
         return result
 
     @modal.method()
@@ -613,10 +625,11 @@ class ComfyAPI_T4:
     @modal.method()
     def list_models(self):
         import os
-        folders = ["checkpoints", "loras", "vae", "controlnet", "upscale_models",
-                   "embeddings", "clip", "diffusion_models", "text_encoders"]
+        # Standalone folders shown as their own sections
+        solo_folders = ["loras", "vae", "controlnet", "upscale_models",
+                        "embeddings", "clip", "text_encoders"]
         result = {}
-        for folder in folders:
+        for folder in solo_folders:
             folder_path = os.path.join(MODELS_PATH, folder)
             if not os.path.isdir(folder_path):
                 result[folder] = []
@@ -627,13 +640,18 @@ class ComfyAPI_T4:
                 if os.path.isfile(fpath):
                     files.append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
             result[folder] = files
-        # unet/ is the legacy path; ComfyUI exposes it as diffusion_models
-        unet_path = os.path.join(MODELS_PATH, "unet")
-        if os.path.isdir(unet_path):
-            for fname in sorted(os.listdir(unet_path)):
-                fpath = os.path.join(unet_path, fname)
+        # Checkpoint-family folders all shown under "checkpoints" in the sidebar,
+        # but each file carries its real "folder" so inject/delete uses the right path.
+        checkpoint_family = ["checkpoints", "diffusion_models", "unet"]
+        result["checkpoints"] = []
+        for folder in checkpoint_family:
+            folder_path = os.path.join(MODELS_PATH, folder)
+            if not os.path.isdir(folder_path):
+                continue
+            for fname in sorted(os.listdir(folder_path)):
+                fpath = os.path.join(folder_path, fname)
                 if os.path.isfile(fpath):
-                    result["diffusion_models"].append({"name": fname, "size": os.path.getsize(fpath), "folder": "unet"})
+                    result["checkpoints"].append({"name": fname, "size": os.path.getsize(fpath), "folder": folder})
         return result
 
     @modal.method()

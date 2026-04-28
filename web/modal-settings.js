@@ -3,7 +3,12 @@ import { api } from "../../scripts/api.js";
 
 const MODAL_PREFIX = "/comfymodal";
 
-const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "diffusion_models", "text_encoders"];
+// Sections shown in the Models panel (order matters).
+// "checkpoints" groups: checkpoints/ + diffusion_models/ + unet/
+const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"];
+
+// Folders available in the "Add Model" download dropdown
+const DOWNLOAD_FOLDERS = ["checkpoints", "diffusion_models", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"];
 
 const GPU_OPTIONS = [
   { value: "a10g",  label: "A10G  (24 GB) — recommended" },
@@ -167,6 +172,18 @@ function renderModelList(data) {
       size.style.cssText = "font-size:11px; color:#666; flex-shrink:0;";
       size.textContent = fmtSize(file.size);
 
+      if (file.folder && file.folder !== folder) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:10px; color:#888; background:#333; border:1px solid #444; border-radius:3px; padding:0 4px; flex-shrink:0;";
+        badge.textContent = file.folder;
+        row.appendChild(name);
+        row.appendChild(badge);
+        row.appendChild(size);
+      } else {
+        row.appendChild(name);
+        row.appendChild(size);
+      }
+
       const delBtn = document.createElement("button");
       delBtn.textContent = "✕";
       delBtn.title = `Delete ${file.name}`;
@@ -177,11 +194,11 @@ function renderModelList(data) {
         display: flex; align-items: center; justify-content: center;
       `;
       delBtn.onclick = async () => {
-        if (!confirm(`Delete ${folder}/${file.name}?`)) return;
+        if (!confirm(`Delete ${file.folder ?? folder}/${file.name}?`)) return;
         delBtn.disabled = true;
         delBtn.textContent = "…";
         try {
-          const r = await api.fetchApi(`${MODAL_PREFIX}/models/${folder}/${encodeURIComponent(file.name)}`, { method: "DELETE" });
+          const r = await api.fetchApi(`${MODAL_PREFIX}/models/${file.folder ?? folder}/${encodeURIComponent(file.name)}`, { method: "DELETE" });
           const result = await r.json();
           if (result.status === "ok") {
             row.remove();
@@ -616,7 +633,7 @@ function buildPanel() {
 
   const folderSelect = document.createElement("select");
   folderSelect.style.cssText = inputStyle() + "flex:1;";
-  for (const f of FOLDERS) {
+  for (const f of DOWNLOAD_FOLDERS) {
     const opt = document.createElement("option");
     opt.value = f;
     opt.textContent = f;
