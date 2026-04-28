@@ -636,8 +636,27 @@ function buildPanel() {
   addToQueueBtn.textContent = "+ Add to Queue";
   addToQueueBtn.style.cssText = btnStyle();
   addToQueueBtn.style.width = "100%";
-  addToQueueBtn.onclick = () => {
+  urlInput.addEventListener("blur", () => {
     const url = urlInput.value.trim();
+    if (!url || filenameInput.value.trim()) return;
+    try {
+      const parts = new URL(url).pathname.split("/");
+      const name = parts.filter(Boolean).pop() || "";
+      if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
+    } catch {}
+  });
+
+  addToQueueBtn.onclick = () => {
+    let url = urlInput.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+    if (!filenameInput.value.trim()) {
+      try {
+        const parts = new URL(url).pathname.split("/");
+        const name = parts.filter(Boolean).pop() || "";
+        if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
+      } catch {}
+    }
     const filename = filenameInput.value.trim();
     const folder = folderSelect.value;
     if (!url || !filename) return;
