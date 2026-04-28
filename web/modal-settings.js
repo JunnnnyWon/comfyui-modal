@@ -3,7 +3,7 @@ import { api } from "../../scripts/api.js";
 
 const MODAL_PREFIX = "/comfymodal";
 
-const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "diffusion_models", "text_encoders"];
+const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "diffusion_models", "text_encoders", "unet"];
 
 const GPU_OPTIONS = [
   { value: "a10g",  label: "A10G  (24 GB) — recommended" },
@@ -720,6 +720,7 @@ function buildPanel() {
       const data = await resp.json();
 
       if (data.status === "ok") {
+        const injectPromises = [];
         data.results.forEach((res, i) => {
           const entry = pending[i];
           if (!entry) return;
@@ -728,7 +729,15 @@ function buildPanel() {
             entry.statusEl.textContent = res.skipped ? "✓ already exists" : "✓ done";
             entry.statusEl.style.color = "#7ed321";
           }
+          injectPromises.push(
+            api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folder: entry.folder, filename: entry.filename }),
+            }).catch(() => {})
+          );
         });
+        await Promise.all(injectPromises);
         batchStatusEl.style.color = "#7ed321";
         batchStatusEl.textContent = `Done — ${pending.length} model(s) downloaded.`;
         await loadModels();
