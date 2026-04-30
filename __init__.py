@@ -18,6 +18,21 @@ _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
 
+def _ensure_modal():
+    try:
+        import modal  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("[comfyui-modal] 'modal' package not found — installing...")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "modal"],
+        check=True,
+    )
+    print("[comfyui-modal] 'modal' installed successfully.")
+
+_ensure_modal()
+
 _deploy_status = {"state": "idle", "message": ""}
 
 def _get_deployed_version():
