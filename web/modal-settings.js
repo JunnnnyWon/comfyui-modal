@@ -1113,7 +1113,7 @@ function buildPanel() {
       if (e.lengthComputable) {
         const pct = Math.round(e.loaded / e.total * 100);
         uploadProgressBar.style.width = pct + "%";
-        uploadStatusEl.textContent = \`Uploading... \${pct}%\`;
+        uploadStatusEl.textContent = `Uploading... ${pct}%`;
       }
     };
     xhr.onload = async () => {
@@ -1123,19 +1123,19 @@ function buildPanel() {
         try { result = JSON.parse(xhr.responseText); } catch {}
         if (result.status === "ok") {
           uploadStatusEl.style.color = "#7ed321";
-          uploadStatusEl.textContent = \`✓ Uploaded \${filename} to \${folder}\`;
+          uploadStatusEl.textContent = `✓ Uploaded ${filename} to ${folder}`;
           uploadFileInput.value = "";
           uploadFilenameInput.value = "";
           await loadModels();
         } else {
           uploadStatusEl.style.color = "#e05";
-          uploadStatusEl.textContent = \`Error: \${result.message || "Upload failed"}\`;
+          uploadStatusEl.textContent = `Error: ${result.message || "Upload failed"}`;
         }
       } else {
         let msg = "Upload failed";
         try { msg = JSON.parse(xhr.responseText).message || msg; } catch {}
         uploadStatusEl.style.color = "#e05";
-        uploadStatusEl.textContent = \`Error: \${msg}\`;
+        uploadStatusEl.textContent = `Error: ${msg}`;
       }
       uploadBtn.disabled = false;
     };
