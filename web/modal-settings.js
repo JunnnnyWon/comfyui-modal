@@ -605,7 +605,6 @@ function buildPanel() {
   hr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
   panel.appendChild(hr);
 
-  // ── API Tokens section ──────────────────────────────────────────────
   const tokensSection = document.createElement("div");
   tokensSection.style.cssText = "flex-shrink:0; border-bottom:1px solid #3a3a3a; padding-bottom:8px;";
 
@@ -782,7 +781,6 @@ function buildPanel() {
   }
 
   loadTokenStatuses();
-  // ── end API Tokens section ───────────────────────────────────────────
 
   const modalSections = document.createElement("div");
   modalSections.style.cssText = "display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden; min-height:0;";
@@ -1025,7 +1023,6 @@ function buildPanel() {
 
   modalSections.appendChild(addSection);
 
-  // ── Upload Local File section ──────────────────────────────────────
   const uploadSection = document.createElement("div");
   uploadSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0; border-top:1px solid #3a3a3a; padding-top:10px;";
 
@@ -1132,7 +1129,9 @@ function buildPanel() {
 
   uploadSection.appendChild(uploadBtn);
   modalSections.appendChild(uploadSection);
-  // ── end Upload Local File section ───────────────────────────────────
+
+  const workflowSection = buildWorkflowSection();
+  modalSections.appendChild(workflowSection);
 
   panel.appendChild(modalSections);
 
@@ -1187,6 +1186,238 @@ function inputStyle() {
     padding: 5px 8px; border-radius: 4px; font-size: 12px;
     width: 100%; box-sizing: border-box; outline: none;
   `;
+}
+
+function buildWorkflowSection() {
+  const section = document.createElement("div");
+  section.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0; border-top:1px solid #3a3a3a; padding-top:10px;";
+
+  const headerRow = document.createElement("div");
+  headerRow.style.cssText = "display:flex; align-items:center; gap:6px;";
+
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:600; font-size:13px; flex:1;";
+  title.textContent = "Workflow Build";
+
+  const resetBtn = document.createElement("button");
+  resetBtn.textContent = "↺";
+  resetBtn.title = "Reset to current nodes.json";
+  resetBtn.style.cssText = btnStyle() + "padding:3px 7px;";
+
+  headerRow.appendChild(title);
+  headerRow.appendChild(resetBtn);
+  section.appendChild(headerRow);
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
+  section.appendChild(fileInput);
+
+  const analyzeBtn = document.createElement("button");
+  analyzeBtn.textContent = "Analyze Workflow";
+  analyzeBtn.disabled = true;
+  analyzeBtn.style.cssText = btnStyle();
+  analyzeBtn.style.width = "100%";
+  section.appendChild(analyzeBtn);
+
+  const analyzeStatusEl = document.createElement("div");
+  analyzeStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
+  section.appendChild(analyzeStatusEl);
+
+  const packageListEl = document.createElement("div");
+  packageListEl.style.cssText = "display:none; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto;";
+  section.appendChild(packageListEl);
+
+  const urlInput = document.createElement("input");
+  urlInput.type = "text";
+  urlInput.placeholder = "Add custom node URL (https://github.com/...)";
+  urlInput.style.cssText = inputStyle();
+  urlInput.style.display = "none";
+  section.appendChild(urlInput);
+
+  const addUrlBtn = document.createElement("button");
+  addUrlBtn.textContent = "+ Add URL";
+  addUrlBtn.style.cssText = btnStyle();
+  addUrlBtn.style.display = "none";
+
+  const buildBtn = document.createElement("button");
+  buildBtn.textContent = "⚙ Build & Deploy";
+  buildBtn.disabled = true;
+  buildBtn.style.cssText = btnStyle("primary");
+  buildBtn.style.display = "none";
+
+  const buildRow = document.createElement("div");
+  buildRow.style.cssText = "display:flex; gap:6px;";
+  buildRow.appendChild(addUrlBtn);
+  buildRow.appendChild(buildBtn);
+  section.appendChild(buildRow);
+
+  const buildStatusEl = document.createElement("div");
+  buildStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
+  section.appendChild(buildStatusEl);
+
+  let pendingNodes = [];
+
+  function renderPackages(nodes, missingRefs) {
+    packageListEl.innerHTML = "";
+    packageListEl.style.display = nodes.length ? "flex" : "none";
+    const missingSet = new Set(missingRefs);
+
+    nodes.forEach(url => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; align-items:center; gap:4px; font-size:11px;";
+
+      const badge = document.createElement("span");
+      const isMissing = missingSet.has(url) || (!url.startsWith("http") && url !== "comfyui-manager");
+      badge.style.cssText = `flex-shrink:0; padding:1px 5px; border-radius:3px; font-size:10px; ${isMissing ? "background:#5a2020; color:#f88;" : "background:#1e3a1e; color:#7ed321;"}`;
+      badge.textContent = isMissing ? "new" : "✓";
+
+      const label = document.createElement("span");
+      label.style.cssText = "flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#ccc;";
+      label.title = url;
+      label.textContent = url === "comfyui-manager" ? "comfyui-manager (core)" : url.replace("https://github.com/", "");
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "✕";
+      removeBtn.style.cssText = "background:none; border:none; color:#888; cursor:pointer; padding:0 2px; font-size:11px; flex-shrink:0;";
+      removeBtn.onclick = () => {
+        pendingNodes = pendingNodes.filter(n => n !== url);
+        renderPackages(pendingNodes, []);
+        buildBtn.disabled = pendingNodes.length === 0;
+      };
+
+      row.appendChild(badge);
+      row.appendChild(label);
+      row.appendChild(removeBtn);
+      packageListEl.appendChild(row);
+    });
+  }
+
+  async function loadCurrentNodes() {
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/workflow/nodes`);
+      const data = await r.json();
+      if (data.status === "ok") {
+        pendingNodes = data.nodes;
+        renderPackages(pendingNodes, []);
+        urlInput.style.display = "block";
+        addUrlBtn.style.display = "block";
+        buildBtn.style.display = "block";
+        buildBtn.disabled = pendingNodes.length === 0;
+      }
+    } catch {}
+  }
+
+  resetBtn.onclick = () => {
+    analyzeStatusEl.textContent = "";
+    buildStatusEl.textContent = "";
+    loadCurrentNodes();
+  };
+
+  fileInput.addEventListener("change", () => {
+    analyzeBtn.disabled = !fileInput.files || !fileInput.files[0];
+  });
+
+  analyzeBtn.onclick = async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = "Analyzing...";
+    analyzeStatusEl.style.color = "#f5a623";
+    analyzeStatusEl.textContent = "Fetching comfyui-manager DB...";
+
+    try {
+      const text = await file.text();
+      let workflow;
+      try {
+        workflow = JSON.parse(text);
+      } catch {
+        throw new Error("Invalid JSON file");
+      }
+
+      const r = await api.fetchApi(`${MODAL_PREFIX}/workflow/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow }),
+      });
+      const data = await r.json();
+      if (data.status !== "ok") throw new Error(data.message || "Analyze failed");
+
+      const { summary, needed_packages, missing_packages, current_nodes } = data;
+
+      const missingRefs = missing_packages.map(p => p.reference);
+      const neededRefs = needed_packages.map(p => p.reference);
+      const merged = [...new Set([...current_nodes, ...neededRefs])];
+      pendingNodes = merged;
+
+      renderPackages(pendingNodes, missingRefs);
+
+      const missingCount = missing_packages.length;
+      const unmatchedCount = summary.unmatched_types ? summary.unmatched_types.length : 0;
+      let msg = `Found ${summary.custom_types} custom type(s). `;
+      msg += missingCount > 0 ? `${missingCount} new package(s) added.` : "All packages already included.";
+      if (unmatchedCount > 0) msg += ` ${unmatchedCount} type(s) unmatched.`;
+      analyzeStatusEl.style.color = missingCount > 0 ? "#f5a623" : "#7ed321";
+      analyzeStatusEl.textContent = msg;
+
+      urlInput.style.display = "block";
+      addUrlBtn.style.display = "block";
+      buildBtn.style.display = "block";
+      buildBtn.disabled = pendingNodes.length === 0;
+    } catch (e) {
+      analyzeStatusEl.style.color = "#e05";
+      analyzeStatusEl.textContent = `Error: ${e.message}`;
+    }
+
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = "Analyze Workflow";
+  };
+
+  addUrlBtn.onclick = () => {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    if (!pendingNodes.includes(url)) {
+      pendingNodes = [...pendingNodes, url];
+      renderPackages(pendingNodes, [url]);
+      buildBtn.disabled = false;
+    }
+    urlInput.value = "";
+  };
+
+  urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addUrlBtn.click(); });
+
+  buildBtn.onclick = async () => {
+    if (pendingNodes.length === 0) return;
+    buildBtn.disabled = true;
+    buildBtn.textContent = "Building...";
+    buildStatusEl.style.color = "#f5a623";
+    buildStatusEl.textContent = "Saving nodes and triggering deploy...";
+
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/workflow/build`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nodes: pendingNodes }),
+      });
+      const data = await r.json();
+      if (data.status !== "ok") throw new Error(data.message || "Build failed");
+      buildStatusEl.style.color = "#7ed321";
+      buildStatusEl.textContent = `✓ Deploy started with ${data.nodes.length} package(s).`;
+      startDeployPoll();
+    } catch (e) {
+      buildStatusEl.style.color = "#e05";
+      buildStatusEl.textContent = `Error: ${e.message}`;
+    }
+
+    buildBtn.disabled = false;
+    buildBtn.textContent = "⚙ Build & Deploy";
+  };
+
+  loadCurrentNodes();
+
+  return section;
 }
 
 app.registerExtension({

@@ -696,4 +696,177 @@ if _server:
         token = tokens.get("civitai_token", "")
         return web.json_response({"has_token": bool(token), "masked": _mask_token(token) if token else ""})
 
-    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models")
+    # ── Workflow analyze / build ────────────────────────────────────────
+
+    _NODES_JSON_PATH = os.path.join(_NODE_DIR, "nodes.json")
+
+    def _load_nodes_json() -> list:
+        try:
+            with open(_NODES_JSON_PATH) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return ["comfyui-manager"]
+
+    def _save_nodes_json_local(nodes: list):
+        with open(_NODES_JSON_PATH, "w") as f:
+            json.dump(nodes, f, indent=2)
+
+    def _fetch_manager_db() -> list:
+        import urllib.request as _ur
+        url = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
+        try:
+            with _ur.urlopen(url, timeout=10) as r:
+                return json.load(r).get("custom_nodes", [])
+        except Exception:
+            return []
+
+    def _classify_workflow_nodes(workflow: dict) -> dict:
+        _BUILTIN_TYPES = {
+            "KSampler", "CLIPTextEncode", "CLIPLoader", "VAEDecode", "VAEEncode",
+            "VAELoader", "UNETLoader", "EmptyLatentImage", "LoadImage", "SaveImage",
+            "ImageQuantize", "ImageSharpen", "AdjustContrast", "Morphology", "SolidMask",
+            "Note", "PrimitiveBoolean", "PrimitiveFloat", "PrimitiveInt",
+            "StringConcatenate", "RegexReplace", "StringReplace", "StringSubstring",
+        }
+
+        nodes_list = []
+        if "nodes" in workflow:
+            nodes_list = workflow["nodes"] if isinstance(workflow["nodes"], list) else []
+        else:
+            for v in workflow.values():
+                if isinstance(v, dict) and "class_type" in v:
+                    nodes_list.append({"type": v["class_type"]})
+
+        class_types = set()
+        for n in nodes_list:
+            if isinstance(n, dict):
+                t = n.get("type", "") or n.get("class_type", "")
+                if t:
+                    class_types.add(t)
+
+        import re as _re
+        _uuid_re = _re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', _re.I)
+        filtered = {t for t in class_types if not _uuid_re.match(t)}
+
+        builtin_types = {t for t in filtered if t in _BUILTIN_TYPES}
+        custom_types = filtered - builtin_types
+
+        return {
+            "all_types": sorted(filtered),
+            "builtin_types": sorted(builtin_types),
+            "custom_types": sorted(custom_types),
+        }
+
+    def _match_nodes_to_packages(custom_types: list, db: list) -> dict:
+        _type_map = {}
+        for entry in db:
+            patterns = entry.get("nodename_pattern", "") or ""
+            if patterns:
+                for p in [x.strip() for x in patterns.split(",") if x.strip()]:
+                    _type_map[p] = entry
+
+        result = {}
+        unmatched = []
+        for ct in custom_types:
+            if ct in _type_map:
+                e = _type_map[ct]
+                result[ct] = {"package": e.get("title", ""), "reference": e.get("reference", "")}
+            else:
+                result[ct] = None
+                unmatched.append(ct)
+
+        return result, unmatched
+
+    @_server.routes.post("/comfymodal/workflow/analyze")
+    async def modal_workflow_analyze(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"status": "error", "message": "Invalid JSON"}, status=400)
+
+        workflow = body.get("workflow", body)
+        if not isinstance(workflow, dict):
+            return web.json_response({"status": "error", "message": "workflow must be an object"}, status=400)
+
+        classified = _classify_workflow_nodes(workflow)
+        custom_types = classified["custom_types"]
+
+        loop = asyncio.get_event_loop()
+        db = await loop.run_in_executor(None, _fetch_manager_db)
+
+        type_to_package, unmatched = _match_nodes_to_packages(custom_types, db)
+
+        needed_packages = {}
+        for ct, pkg in type_to_package.items():
+            if pkg and pkg["reference"]:
+                ref = pkg["reference"]
+                if ref not in needed_packages:
+                    needed_packages[ref] = {"title": pkg["package"], "reference": ref, "types": []}
+                needed_packages[ref]["types"].append(ct)
+
+        current_nodes = _load_nodes_json()
+        current_refs = set(current_nodes)
+
+        missing = [v for ref, v in needed_packages.items() if ref not in current_refs]
+        already_included = [v for ref, v in needed_packages.items() if ref in current_refs]
+
+        return web.json_response({
+            "status": "ok",
+            "summary": {
+                "total_node_types": len(classified["all_types"]),
+                "custom_types": len(custom_types),
+                "builtin_types": len(classified["builtin_types"]),
+                "unmatched_types": unmatched,
+            },
+            "needed_packages": list(needed_packages.values()),
+            "missing_packages": missing,
+            "already_included": already_included,
+            "current_nodes": current_nodes,
+            "type_to_package": type_to_package,
+        })
+
+    @_server.routes.post("/comfymodal/workflow/build")
+    async def modal_workflow_build(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"status": "error", "message": "Invalid JSON"}, status=400)
+
+        nodes = body.get("nodes")
+        if not isinstance(nodes, list) or not nodes:
+            return web.json_response({"status": "error", "message": "nodes must be a non-empty list"}, status=400)
+
+        for n in nodes:
+            if not isinstance(n, str):
+                return web.json_response({"status": "error", "message": "each node entry must be a string"}, status=400)
+
+        try:
+            _save_nodes_json_local(nodes)
+        except Exception as e:
+            return web.json_response({"status": "error", "message": f"Failed to save nodes.json: {e}"}, status=500)
+
+        try:
+            from modal_client import save_nodes
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: asyncio.run(save_nodes(nodes)))
+        except Exception as e:
+            print(f"[comfyui-modal] Warning: could not save nodes to Modal volume: {e}")
+
+        if _deploy_status.get("state") != "deploying":
+            t = threading.Thread(target=_run_deploy_background, daemon=True)
+            t.start()
+
+        return web.json_response({
+            "status": "ok",
+            "nodes": nodes,
+            "deploying": True,
+        })
+
+    @_server.routes.get("/comfymodal/workflow/nodes")
+    async def modal_workflow_get_nodes(request: web.Request) -> web.Response:
+        return web.json_response({
+            "status": "ok",
+            "nodes": _load_nodes_json(),
+        })
+
+    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models, /comfymodal/workflow/analyze, /comfymodal/workflow/build, /comfymodal/workflow/nodes")
