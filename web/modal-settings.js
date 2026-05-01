@@ -1420,6 +1420,134 @@ function buildWorkflowSection() {
   return section;
 }
 
+function _showOnboardingBanner() {
+  if (document.getElementById("modal-onboarding-banner")) return;
+  const banner = document.createElement("div");
+  banner.id = "modal-onboarding-banner";
+  Object.assign(banner.style, {
+    position: "fixed",
+    bottom: "24px",
+    right: "24px",
+    zIndex: "9999",
+    background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+    color: "#e0e0e0",
+    borderRadius: "12px",
+    padding: "16px 20px",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(99,102,241,0.3)",
+    maxWidth: "320px",
+    fontFamily: "inherit",
+    fontSize: "13px",
+    lineHeight: "1.5",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    animation: "modalBannerSlideIn 0.3s ease",
+  });
+
+  if (!document.getElementById("modal-banner-styles")) {
+    const style = document.createElement("style");
+    style.id = "modal-banner-styles";
+    style.textContent = `
+      @keyframes modalBannerSlideIn {
+        from { opacity: 0; transform: translateY(16px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      #modal-onboarding-banner button.modal-banner-btn {
+        background: #6366f1;
+        color: #fff;
+        border: none;
+        border-radius: 7px;
+        padding: 8px 14px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        transition: background 0.2s;
+      }
+      #modal-onboarding-banner button.modal-banner-btn:hover { background: #4f46e5; }
+      #modal-onboarding-banner button.modal-banner-close {
+        background: transparent;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        padding: 0;
+        margin-left: auto;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  const header = document.createElement("div");
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.gap = "8px";
+
+  const icon = document.createElement("span");
+  icon.textContent = "☁️";
+  icon.style.fontSize = "18px";
+
+  const title = document.createElement("span");
+  title.textContent = "Modal GPU not configured";
+  title.style.fontWeight = "700";
+  title.style.fontSize = "14px";
+  title.style.color = "#fff";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "modal-banner-close";
+  closeBtn.textContent = "✕";
+  closeBtn.title = "Dismiss";
+  closeBtn.onclick = () => banner.remove();
+
+  header.appendChild(icon);
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+
+  const msg = document.createElement("div");
+  msg.style.color = "#b0b0c0";
+  msg.textContent = "Set up your Modal token to run workflows on cloud GPUs.";
+
+  const openBtn = document.createElement("button");
+  openBtn.className = "modal-banner-btn";
+  openBtn.textContent = "Open Modal Settings →";
+  openBtn.onclick = () => {
+    _activateModalSidebarTab();
+    banner.remove();
+  };
+
+  banner.appendChild(header);
+  banner.appendChild(msg);
+  banner.appendChild(openBtn);
+  document.body.appendChild(banner);
+
+  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 15000);
+}
+
+function _activateModalSidebarTab() {
+  try {
+    const em = app?.extensionManager;
+    if (em?.sidebarTab) {
+      em.sidebarTab.activeSidebarTabId = "modal-gpu";
+      return;
+    }
+  } catch (_) {}
+
+  try {
+    const btn = document.querySelector(
+      '[data-tab-id="modal-gpu"], [title="Modal GPU"], [aria-label="Modal GPU"]'
+    );
+    if (btn) { btn.click(); return; }
+
+    const allBtns = document.querySelectorAll(".sidebar-icon-container button, .side-bar-button");
+    for (const b of allBtns) {
+      if (b.title?.includes("Modal") || b.getAttribute("aria-label")?.includes("Modal")) {
+        b.click();
+        return;
+      }
+    }
+  } catch (_) {}
+}
+
 app.registerExtension({
   name: "comfyui.modal.settings",
 
@@ -1457,5 +1585,15 @@ app.registerExtension({
         },
       });
     }
+
+    setTimeout(async () => {
+      try {
+        const resp = await api.fetchApi(`${MODAL_PREFIX}/auth/status`);
+        const { connected } = await resp.json();
+        if (!connected) {
+          _showOnboardingBanner();
+        }
+      } catch (_) {}
+    }, 2000);
   },
 });
