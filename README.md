@@ -10,11 +10,14 @@ No need to manage servers or pay for idle time. Modal spins up a GPU container o
 
 ## Features
 
-- 🚀 **On-demand GPU** — A10G, A100, or T4. Pay only for what you use.
+- 🚀 **On-demand GPU** — A10G, L4, L40S, A100 (40 GB), A100 (80 GB), H100, H200, or T4. Pay only for what you use.
 - ☁️ **Cloud model storage** — Models live in a Modal Volume, not on your local disk.
 - 🔄 **Auto-deploy** — ComfyUI deploys the Modal app automatically on startup when the app version changes.
 - 🔌 **One-click connect** — Enter your Modal token directly in the ComfyUI sidebar. No terminal needed.
 - 🔀 **Local fallback** — Toggle Modal off to run generations locally at any time.
+- ⬆️ **Local file upload** — Upload model files directly from your local machine to the Modal Volume.
+- 🤗 **HuggingFace & CivitAI download** — Download models with your HF/CivitAI tokens; authenticated downloads supported.
+- ⬇ **Inject All** — Batch-create local placeholder files for all cloud models in one click.
 
 ---
 
@@ -125,14 +128,45 @@ Models are stored in a Modal Volume (`comfyui-models`), not locally.
 | **Download a model** | Paste URL + filename in Add Model, click Download |
 | **Delete a model** | Click ✕ next to any model |
 | **Inject as local placeholder** | Click ⬇L — creates a zero-byte `modal-<filename>` locally so ComfyUI nodes can reference it |
+| **Inject All** | Click **⬇ All** to batch-create placeholders for all non-injected models at once |
 
 ### GPU options
 
 | GPU | VRAM | Best for |
 |-----|------|----------|
 | **A10G** | 24 GB | SDXL, Flux, most workflows (default) |
+| **L4** | 24 GB | Efficient mid-range option |
+| **L40S** | 48 GB | Large models, video |
 | **A100** | 40 GB | Large models, video, multi-LoRA stacks |
+| **A100 80GB** | 80 GB | Very large models, heavy video pipelines |
+| **H100** | 80 GB | Fastest inference, large models |
+| **H200** | 141 GB | Largest models, research workloads |
 | **T4** | 16 GB | Budget option — slower, cheapest |
+
+### Managing models
+
+Models are stored in a Modal Volume (`comfyui-models`), not locally.
+
+| Action | How |
+|--------|-----|
+| **View models** | Models section in the sidebar |
+| **Download a model** | Paste URL + filename in Add Model, click Download |
+| **Download from HuggingFace** | Paste a `huggingface.co` URL — your saved HF token is used automatically |
+| **Download from CivitAI** | Paste a `civitai.com` URL — your saved CivitAI token is used automatically |
+| **Upload a local file** | Use **Upload Local File** section — select file, choose folder, click ⬆ Upload |
+| **Delete a model** | Click ✕ next to any model |
+| **Inject as local placeholder** | Click ⬇L — creates a zero-byte `modal-<filename>` locally so ComfyUI nodes can reference it |
+| **Inject All** | Click **⬇ All** to batch-create placeholders for all non-injected models at once |
+
+### API Tokens (HuggingFace & CivitAI)
+
+Save your tokens once in the **API Tokens** section of the sidebar. They are stored locally in `~/.comfyui-modal-tokens.json` and automatically injected into all model download requests.
+
+1. Expand **API Tokens** in the sidebar
+2. Paste your HuggingFace token (`hf_...`) and/or CivitAI API key
+3. Click **Save HF Token** / **Save CivitAI Token**
+
+Tokens are masked after saving and never sent to Modal in plaintext (passed as function arguments to the secure container).
 
 ### Local mode
 
@@ -296,7 +330,7 @@ ComfyUI (local)
         └── Manages model downloads to Modal Volume
 ```
 
-The `comfyapp.py` file defines the Modal app — three independent GPU classes (`ComfyAPI` / `ComfyAPI_A100` / `ComfyAPI_T4`), each running a full ComfyUI server inside a Modal container.
+The `comfyapp.py` file defines the Modal app — eight independent GPU classes (`ComfyAPI` / `ComfyAPI_A100` / `ComfyAPI_A100_80` / `ComfyAPI_T4` / `ComfyAPI_L4` / `ComfyAPI_L40S` / `ComfyAPI_H100` / `ComfyAPI_H200`), each running a full ComfyUI server inside a Modal container.
 
 ---
 

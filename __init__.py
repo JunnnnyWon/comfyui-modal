@@ -169,6 +169,30 @@ _COMFYUI_ROOT = os.path.dirname(os.path.dirname(_NODE_DIR))
 
 _MODAL_TOML_PATH = os.path.expanduser("~/.modal.toml")
 
+_TOKENS_FILE = os.path.expanduser("~/.comfyui-modal-tokens.json")
+
+def _load_tokens() -> dict:
+    try:
+        with open(_TOKENS_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def _save_tokens(updates: dict):
+    tokens = _load_tokens()
+    tokens.update(updates)
+    with open(_TOKENS_FILE, "w") as f:
+        json.dump(tokens, f)
+    try:
+        os.chmod(_TOKENS_FILE, 0o600)
+    except Exception:
+        pass
+
+def _mask_token(token: str) -> str:
+    if not token or len(token) < 8:
+        return "****"
+    return token[:6] + "****"
+
 def _is_modal_token_set() -> bool:
     try:
         with open(_MODAL_TOML_PATH, "r") as f:
@@ -410,6 +434,10 @@ if _server:
             if not it.get("url") or not it.get("filename"):
                 return web.json_response({"status": "error", "message": "each item needs url and filename"}, status=400)
         try:
+            _tokens = _load_tokens()
+            for it in items:
+                it.setdefault("hf_token", _tokens.get("hf_token", ""))
+                it.setdefault("civitai_token", _tokens.get("civitai_token", ""))
             results = await batch_download_models(items)
             return web.json_response({"status": "ok", "results": results})
         except Exception as e:
@@ -429,7 +457,14 @@ if _server:
             )
 
         try:
-            result = await download_model(url=url, filename=filename, save_path=save_path)
+            _tokens = _load_tokens()
+            result = await download_model(
+                url=url,
+                filename=filename,
+                save_path=save_path,
+                hf_token=_tokens.get("hf_token", ""),
+                civitai_token=_tokens.get("civitai_token", ""),
+            )
             return web.json_response({"status": "ok", **result})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -494,6 +529,27 @@ if _server:
     @_server.routes.post("/comfymodal/models/inject")
     async def modal_inject_placeholder(request: web.Request) -> web.Response:
         body = await request.json()
+
+        # Support batch: {"items": [{folder, filename}, ...]}
+        items = body.get("items")
+        if items is not None:
+            results = []
+            for item in items:
+                folder = os.path.basename(item.get("folder", ""))
+                filename = os.path.basename(item.get("filename", ""))
+                if not folder or not filename:
+                    results.append({"status": "error", "message": "folder and filename required"})
+                    continue
+                prefixed = f"modal-{filename}"
+                local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
+                os.makedirs(local_dir, exist_ok=True)
+                dest = os.path.join(local_dir, prefixed)
+                if not os.path.exists(dest):
+                    open(dest, "wb").close()
+                results.append({"status": "ok", "local_path": dest, "name": prefixed})
+            return web.json_response({"status": "ok", "results": results})
+
+        # Single item (backward compat): {"folder": "...", "filename": "..."}
         folder = os.path.basename(body.get("folder", ""))
         filename = os.path.basename(body.get("filename", ""))
         if not folder or not filename:
@@ -528,5 +584,111 @@ if _server:
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    @_server.routes.post("/comfymodal/models/upload")
+    async def modal_upload_model(request: web.Request) -> web.Response:
+        import tempfile
+        from aiohttp.multipart import BodyPartReader
+
+        _UPLOAD_ALLOWED_FOLDERS = [
+            "checkpoints", "diffusion_models", "unet", "loras", "vae",
+            "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"
+        ]
+
+        tmp_path = None
+
+        try:
+            reader = await request.multipart()
+            folder = None
+            filename = None
+
+            while True:
+                field = await reader.next()
+                if field is None:
+                    break
+                if not isinstance(field, BodyPartReader):
+                    continue
+                if field.name == "folder":
+                    folder = (await field.read(decode=True)).decode("utf-8").strip()
+                elif field.name == "filename":
+                    filename = (await field.read(decode=True)).decode("utf-8").strip()
+                elif field.name == "file":
+                    if not filename:
+                        filename = field.filename or "upload.bin"
+                    filename = os.path.basename(filename)
+                    tmp_fd, tmp_path = tempfile.mkstemp(suffix="_comfymodal_upload")
+                    with os.fdopen(tmp_fd, "wb") as tmp_f:
+                        while True:
+                            chunk = await field.read_chunk(65536)
+                            if not chunk:
+                                break
+                            tmp_f.write(chunk)
+
+            if not folder or not filename or not tmp_path:
+                return web.json_response({"status": "error", "message": "folder, filename, and file are required"}, status=400)
+
+            if folder not in _UPLOAD_ALLOWED_FOLDERS:
+                return web.json_response({"status": "error", "message": f"Invalid folder. Must be one of: {_UPLOAD_ALLOWED_FOLDERS}"}, status=400)
+
+            file_size = os.path.getsize(tmp_path)
+            remote_path = f"{folder}/{filename}"
+
+            import modal as _modal_upload
+            _vol = _modal_upload.Volume.from_name("comfyui-models", create_if_missing=True)
+            with _vol.batch_upload(force=True) as upload:
+                upload.put_file(tmp_path, remote_path)
+
+            prefixed = f"modal-{filename}"
+            local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
+            os.makedirs(local_dir, exist_ok=True)
+            dest = os.path.join(local_dir, prefixed)
+            if not os.path.exists(dest):
+                open(dest, "wb").close()
+
+            return web.json_response({
+                "status": "ok",
+                "remote_path": remote_path,
+                "local_placeholder": dest,
+                "size": file_size,
+            })
+
+        except web.HTTPException:
+            raise
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    @_server.routes.post("/comfymodal/settings/hf-token")
+    async def modal_set_hf_token(request: web.Request) -> web.Response:
+        body = await request.json()
+        token = body.get("token", "").strip()
+        if token and not token.startswith("hf_"):
+            return web.json_response({"status": "error", "message": "HuggingFace token must start with hf_"}, status=400)
+        _save_tokens({"hf_token": token})
+        return web.json_response({"status": "ok"})
+
+    @_server.routes.get("/comfymodal/settings/hf-token")
+    async def modal_get_hf_token(request: web.Request) -> web.Response:
+        tokens = _load_tokens()
+        token = tokens.get("hf_token", "")
+        return web.json_response({"has_token": bool(token), "masked": _mask_token(token) if token else ""})
+
+    @_server.routes.post("/comfymodal/settings/civitai-token")
+    async def modal_set_civitai_token(request: web.Request) -> web.Response:
+        body = await request.json()
+        token = body.get("token", "").strip()
+        _save_tokens({"civitai_token": token})
+        return web.json_response({"status": "ok"})
+
+    @_server.routes.get("/comfymodal/settings/civitai-token")
+    async def modal_get_civitai_token(request: web.Request) -> web.Response:
+        tokens = _load_tokens()
+        token = tokens.get("civitai_token", "")
+        return web.json_response({"has_token": bool(token), "masked": _mask_token(token) if token else ""})
 
     print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models")

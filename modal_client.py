@@ -2,9 +2,14 @@ import asyncio
 import modal
 
 _apis = {
-    "a10g": modal.Cls.from_name("comfyui", "ComfyAPI"),
-    "a100": modal.Cls.from_name("comfyui", "ComfyAPI_A100"),
-    "t4":   modal.Cls.from_name("comfyui", "ComfyAPI_T4"),
+    "a10g":     modal.Cls.from_name("comfyui", "ComfyAPI"),
+    "a100":     modal.Cls.from_name("comfyui", "ComfyAPI_A100"),
+    "a100-80gb": modal.Cls.from_name("comfyui", "ComfyAPI_A100_80"),
+    "t4":       modal.Cls.from_name("comfyui", "ComfyAPI_T4"),
+    "l4":       modal.Cls.from_name("comfyui", "ComfyAPI_L4"),
+    "l40s":     modal.Cls.from_name("comfyui", "ComfyAPI_L40S"),
+    "h100":     modal.Cls.from_name("comfyui", "ComfyAPI_H100"),
+    "h200":     modal.Cls.from_name("comfyui", "ComfyAPI_H200"),
 }
 _download_fn = modal.Function.from_name("comfyui", "download_model_to_volume")
 _batch_download_fn = modal.Function.from_name("comfyui", "batch_download_models")
@@ -44,11 +49,17 @@ async def health_check() -> dict:
     return await loop.run_in_executor(None, _api().health.remote)
 
 
-async def download_model(url: str, filename: str, save_path: str = "checkpoints") -> dict:
+async def download_model(url: str, filename: str, save_path: str = "checkpoints", hf_token=None, civitai_token=None) -> dict:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: _download_fn.remote(url=url, filename=filename, save_path=save_path),
+        lambda: _download_fn.remote(
+            url=url,
+            filename=filename,
+            save_path=save_path,
+            hf_token=hf_token,
+            civitai_token=civitai_token,
+        ),
     )
 
 

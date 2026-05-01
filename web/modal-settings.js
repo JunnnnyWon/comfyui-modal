@@ -11,9 +11,14 @@ const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", 
 const DOWNLOAD_FOLDERS = ["checkpoints", "diffusion_models", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"];
 
 const GPU_OPTIONS = [
-  { value: "a10g",  label: "A10G  (24 GB) — recommended" },
-  { value: "a100",  label: "A100  (40 GB)" },
-  { value: "t4",    label: "T4    (16 GB) — budget" },
+  { value: "a10g",    label: "A10G   (24 GB VRAM) — recommended" },
+  { value: "l4",      label: "L4     (24 GB VRAM)" },
+  { value: "l40s",    label: "L40S   (48 GB VRAM)" },
+  { value: "a100",    label: "A100   (40 GB VRAM)" },
+  { value: "a100-80gb", label: "A100   (80 GB VRAM)" },
+  { value: "h100",    label: "H100   (80 GB VRAM)" },
+  { value: "h200",    label: "H200   (141 GB VRAM)" },
+  { value: "t4",      label: "T4     (16 GB VRAM) — budget" },
 ];
 
 const STORAGE_KEY_GPU    = "comfymodal_gpu";
@@ -31,6 +36,7 @@ let currentStatus = STATUS.UNKNOWN;
 let dotEl = null;
 let statusEl = null;
 let modelListEl = null;
+let injectAllBtn = null;
 let deployBannerEl = null;
 let deployBannerTextEl = null;
 let _deployPollTimer = null;
@@ -145,6 +151,7 @@ function renderModelList(data) {
   modelListEl.innerHTML = "";
 
   let hasAny = false;
+  let nonInjectedCount = 0;
   for (const folder of FOLDERS) {
     const files = data[folder] || [];
     if (files.length === 0) continue;
@@ -160,6 +167,7 @@ function renderModelList(data) {
 
     for (const file of files) {
       const alreadyInjected = file.name.startsWith("modal-");
+      if (!alreadyInjected) nonInjectedCount++;
       const row = document.createElement("div");
       row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
 
@@ -266,6 +274,11 @@ function renderModelList(data) {
 
   if (!hasAny) {
     modelListEl.innerHTML = `<div style="color:#666;font-size:12px;padding:8px 0;">No models in volume.</div>`;
+  }
+
+  if (injectAllBtn) {
+    injectAllBtn.style.display = nonInjectedCount > 0 ? "" : "none";
+    injectAllBtn.title = `Inject all ${nonInjectedCount} non-injected models as local placeholders`;
   }
 }
 
@@ -532,7 +545,13 @@ function buildPanel() {
     gpuSelect.appendChild(o);
   }
 
-  const savedGpu = localStorage.getItem(STORAGE_KEY_GPU) || "a10g";
+  const _rawSavedGpu = localStorage.getItem(STORAGE_KEY_GPU) || "a10g";
+  // Migrate: ensure saved value is valid; fall back to a10g if unknown
+  const _validGpuValues = GPU_OPTIONS.map(o => o.value);
+  const savedGpu = _validGpuValues.includes(_rawSavedGpu) ? _rawSavedGpu : "a10g";
+  if (savedGpu !== _rawSavedGpu) {
+    localStorage.setItem(STORAGE_KEY_GPU, savedGpu);
+  }
   gpuSelect.value = savedGpu;
   window._comfyModalGpu = savedGpu;
 
@@ -586,6 +605,185 @@ function buildPanel() {
   hr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
   panel.appendChild(hr);
 
+  // ── API Tokens section ──────────────────────────────────────────────
+  const tokensSection = document.createElement("div");
+  tokensSection.style.cssText = "flex-shrink:0; border-bottom:1px solid #3a3a3a; padding-bottom:8px;";
+
+  const tokensHeader = document.createElement("div");
+  tokensHeader.style.cssText = "display:flex; align-items:center; gap:6px; cursor:pointer; padding:6px 0 4px;";
+
+  const tokensArrow = document.createElement("span");
+  tokensArrow.style.cssText = "font-size:10px; color:#888; transition:transform 0.15s;";
+  tokensArrow.textContent = "▶";
+
+  const tokensTitle = document.createElement("span");
+  tokensTitle.style.cssText = "font-size:12px; font-weight:600; color:#aaa;";
+  tokensTitle.textContent = "API Tokens";
+
+  const tokensStatusBadge = document.createElement("span");
+  tokensStatusBadge.style.cssText = "font-size:10px; color:#888; margin-left:auto;";
+  tokensStatusBadge.textContent = "";
+
+  tokensHeader.appendChild(tokensArrow);
+  tokensHeader.appendChild(tokensTitle);
+  tokensHeader.appendChild(tokensStatusBadge);
+
+  const tokensBody = document.createElement("div");
+  tokensBody.style.cssText = "display:none; flex-direction:column; gap:8px; padding-top:4px;";
+
+  let tokensExpanded = false;
+  tokensHeader.onclick = () => {
+    tokensExpanded = !tokensExpanded;
+    tokensBody.style.display = tokensExpanded ? "flex" : "none";
+    tokensArrow.style.transform = tokensExpanded ? "rotate(90deg)" : "";
+  };
+
+  // HuggingFace token row
+  const hfRow = document.createElement("div");
+  hfRow.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+
+  const hfLabel = document.createElement("div");
+  hfLabel.style.cssText = "font-size:11px; color:#888;";
+  hfLabel.textContent = "HuggingFace Token";
+
+  const hfInputRow = document.createElement("div");
+  hfInputRow.style.cssText = "display:flex; gap:4px;";
+
+  const hfInput = document.createElement("input");
+  hfInput.type = "password";
+  hfInput.placeholder = "hf_...";
+  hfInput.style.cssText = inputStyle() + "flex:1; margin:0;";
+
+  const hfStatusEl = document.createElement("span");
+  hfStatusEl.style.cssText = "font-size:10px; color:#888; align-self:center; flex-shrink:0; min-width:60px; text-align:right;";
+
+  const hfSaveBtn = document.createElement("button");
+  hfSaveBtn.textContent = "Save";
+  hfSaveBtn.style.cssText = btnStyle() + "padding:4px 8px; flex-shrink:0;";
+  hfSaveBtn.onclick = async () => {
+    const token = hfInput.value.trim();
+    hfSaveBtn.disabled = true;
+    hfSaveBtn.textContent = "…";
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/settings/hf-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = await r.json();
+      if (data.status === "ok") {
+        hfStatusEl.textContent = token ? "✓ Saved" : "Cleared";
+        hfStatusEl.style.color = "#7ed321";
+        hfInput.value = "";
+        loadTokenStatuses();
+      } else {
+        hfStatusEl.textContent = data.message || "Error";
+        hfStatusEl.style.color = "#e05";
+      }
+    } catch (e) {
+      hfStatusEl.textContent = "Error";
+      hfStatusEl.style.color = "#e05";
+    }
+    hfSaveBtn.disabled = false;
+    hfSaveBtn.textContent = "Save";
+  };
+
+  hfInputRow.appendChild(hfInput);
+  hfInputRow.appendChild(hfSaveBtn);
+  hfInputRow.appendChild(hfStatusEl);
+  hfRow.appendChild(hfLabel);
+  hfRow.appendChild(hfInputRow);
+
+  // CivitAI token row
+  const civRow = document.createElement("div");
+  civRow.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+
+  const civLabel = document.createElement("div");
+  civLabel.style.cssText = "font-size:11px; color:#888;";
+  civLabel.textContent = "CivitAI API Key";
+
+  const civInputRow = document.createElement("div");
+  civInputRow.style.cssText = "display:flex; gap:4px;";
+
+  const civInput = document.createElement("input");
+  civInput.type = "password";
+  civInput.placeholder = "API key...";
+  civInput.style.cssText = inputStyle() + "flex:1; margin:0;";
+
+  const civStatusEl = document.createElement("span");
+  civStatusEl.style.cssText = "font-size:10px; color:#888; align-self:center; flex-shrink:0; min-width:60px; text-align:right;";
+
+  const civSaveBtn = document.createElement("button");
+  civSaveBtn.textContent = "Save";
+  civSaveBtn.style.cssText = btnStyle() + "padding:4px 8px; flex-shrink:0;";
+  civSaveBtn.onclick = async () => {
+    const token = civInput.value.trim();
+    civSaveBtn.disabled = true;
+    civSaveBtn.textContent = "…";
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/settings/civitai-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = await r.json();
+      if (data.status === "ok") {
+        civStatusEl.textContent = token ? "✓ Saved" : "Cleared";
+        civStatusEl.style.color = "#7ed321";
+        civInput.value = "";
+        loadTokenStatuses();
+      } else {
+        civStatusEl.textContent = data.message || "Error";
+        civStatusEl.style.color = "#e05";
+      }
+    } catch (e) {
+      civStatusEl.textContent = "Error";
+      civStatusEl.style.color = "#e05";
+    }
+    civSaveBtn.disabled = false;
+    civSaveBtn.textContent = "Save";
+  };
+
+  civInputRow.appendChild(civInput);
+  civInputRow.appendChild(civSaveBtn);
+  civInputRow.appendChild(civStatusEl);
+  civRow.appendChild(civLabel);
+  civRow.appendChild(civInputRow);
+
+  tokensBody.appendChild(hfRow);
+  tokensBody.appendChild(civRow);
+  tokensSection.appendChild(tokensHeader);
+  tokensSection.appendChild(tokensBody);
+  panel.appendChild(tokensSection);
+
+  async function loadTokenStatuses() {
+    try {
+      const [hfResp, civResp] = await Promise.all([
+        api.fetchApi(`${MODAL_PREFIX}/settings/hf-token`),
+        api.fetchApi(`${MODAL_PREFIX}/settings/civitai-token`),
+      ]);
+      const hfData = await hfResp.json();
+      const civData = await civResp.json();
+
+      let badges = [];
+      if (hfData.has_token) badges.push("HF");
+      if (civData.has_token) badges.push("CivitAI");
+      tokensStatusBadge.textContent = badges.length ? `(${badges.join(", ")} set)` : "";
+
+      if (hfData.has_token) {
+        hfStatusEl.textContent = hfData.masked;
+        hfStatusEl.style.color = "#7ed321";
+      }
+      if (civData.has_token) {
+        civStatusEl.textContent = civData.masked;
+        civStatusEl.style.color = "#7ed321";
+      }
+    } catch {}
+  }
+
+  loadTokenStatuses();
+  // ── end API Tokens section ───────────────────────────────────────────
+
   const modalSections = document.createElement("div");
   modalSections.style.cssText = "display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden; min-height:0;";
 
@@ -604,8 +802,61 @@ function buildPanel() {
   refreshBtn.style.cssText = btnStyle();
   refreshBtn.onclick = loadModels;
 
+  injectAllBtn = document.createElement("button");
+  injectAllBtn.textContent = "⬇ All";
+  injectAllBtn.title = "Inject all non-injected models as local placeholders";
+  injectAllBtn.style.cssText = btnStyle();
+  injectAllBtn.style.display = "none";
+
+  injectAllBtn.onclick = async () => {
+    const resp = await api.fetchApi(`${MODAL_PREFIX}/models`);
+    if (!resp.ok) {
+      alert("Inject All failed: Failed to fetch models");
+      return;
+    }
+
+    const data = await resp.json();
+    let count = 0;
+    const items = [];
+
+    for (const sectionKey of FOLDERS) {
+      const files = data[sectionKey] || [];
+      for (const file of files) {
+        if (file.name.startsWith("modal-")) continue;
+        count++;
+        items.push({ folder: file.folder || sectionKey, filename: file.name });
+      }
+    }
+
+    if (count === 0) return;
+    if (count > 10 && !confirm(`Inject all ${count} models?`)) return;
+
+    injectAllBtn.disabled = true;
+    injectAllBtn.textContent = "…";
+
+    try {
+      const injectResp = await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const result = await injectResp.json();
+      if (result.status === "ok") {
+        await loadModels();
+      } else {
+        throw new Error(result.message || "Inject failed");
+      }
+    } catch (e) {
+      alert(`Inject All failed: ${e.message}`);
+    }
+
+    injectAllBtn.disabled = false;
+    injectAllBtn.textContent = "⬇ All";
+  };
+
   listHeader.appendChild(listTitle);
   listHeader.appendChild(refreshBtn);
+  listHeader.appendChild(injectAllBtn);
   modelsSection.appendChild(listHeader);
 
   modelListEl = document.createElement("div");
@@ -781,6 +1032,130 @@ function buildPanel() {
   addSection.appendChild(downloadAllBtn);
 
   modalSections.appendChild(addSection);
+
+  // ── Upload Local File section ──────────────────────────────────────
+  const uploadSection = document.createElement("div");
+  uploadSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0; border-top:1px solid #3a3a3a; padding-top:10px;";
+
+  const uploadTitle = document.createElement("div");
+  uploadTitle.style.cssText = "font-weight:600; font-size:13px;";
+  uploadTitle.textContent = "Upload Local File";
+  uploadSection.appendChild(uploadTitle);
+
+  const uploadFileInput = document.createElement("input");
+  uploadFileInput.type = "file";
+  uploadFileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
+  uploadSection.appendChild(uploadFileInput);
+
+  const uploadRow2 = document.createElement("div");
+  uploadRow2.style.cssText = "display:flex; gap:6px;";
+
+  const uploadFolderSelect = document.createElement("select");
+  uploadFolderSelect.style.cssText = inputStyle() + "flex:1; margin:0;";
+  for (const f of DOWNLOAD_FOLDERS) {
+    const opt = document.createElement("option");
+    opt.value = f;
+    opt.textContent = f;
+    uploadFolderSelect.appendChild(opt);
+  }
+
+  const uploadFilenameInput = document.createElement("input");
+  uploadFilenameInput.type = "text";
+  uploadFilenameInput.placeholder = "filename (optional override)";
+  uploadFilenameInput.style.cssText = inputStyle() + "flex:2; margin:0;";
+
+  uploadRow2.appendChild(uploadFolderSelect);
+  uploadRow2.appendChild(uploadFilenameInput);
+  uploadSection.appendChild(uploadRow2);
+
+  // Auto-fill filename from selected file
+  uploadFileInput.addEventListener("change", () => {
+    if (uploadFileInput.files && uploadFileInput.files[0] && !uploadFilenameInput.value.trim()) {
+      uploadFilenameInput.value = uploadFileInput.files[0].name;
+    }
+  });
+
+  // Progress bar
+  const uploadProgressWrap = document.createElement("div");
+  uploadProgressWrap.style.cssText = "background:#1a1a1a; border-radius:3px; height:6px; overflow:hidden; display:none;";
+  const uploadProgressBar = document.createElement("div");
+  uploadProgressBar.style.cssText = "height:100%; background:#3a6fcc; width:0%; transition:width 0.1s;";
+  uploadProgressWrap.appendChild(uploadProgressBar);
+  uploadSection.appendChild(uploadProgressWrap);
+
+  const uploadStatusEl = document.createElement("div");
+  uploadStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
+  uploadSection.appendChild(uploadStatusEl);
+
+  const uploadBtn = document.createElement("button");
+  uploadBtn.textContent = "⬆ Upload";
+  uploadBtn.disabled = true;
+  uploadBtn.style.cssText = btnStyle("primary");
+  uploadBtn.onclick = () => {
+    const file = uploadFileInput.files && uploadFileInput.files[0];
+    if (!file) return;
+    const folder = uploadFolderSelect.value;
+    const filename = uploadFilenameInput.value.trim() || file.name;
+
+    uploadBtn.disabled = true;
+    uploadProgressWrap.style.display = "block";
+    uploadProgressBar.style.width = "0%";
+    uploadStatusEl.style.color = "#f5a623";
+    uploadStatusEl.textContent = "Uploading...";
+
+    const formData = new FormData();
+    formData.append("folder", folder);
+    formData.append("filename", filename);
+    formData.append("file", file, filename);
+
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 100);
+        uploadProgressBar.style.width = pct + "%";
+        uploadStatusEl.textContent = \`Uploading... \${pct}%\`;
+      }
+    };
+    xhr.onload = async () => {
+      uploadProgressBar.style.width = "100%";
+      if (xhr.status >= 200 && xhr.status < 300) {
+        let result = {};
+        try { result = JSON.parse(xhr.responseText); } catch {}
+        if (result.status === "ok") {
+          uploadStatusEl.style.color = "#7ed321";
+          uploadStatusEl.textContent = \`✓ Uploaded \${filename} to \${folder}\`;
+          uploadFileInput.value = "";
+          uploadFilenameInput.value = "";
+          await loadModels();
+        } else {
+          uploadStatusEl.style.color = "#e05";
+          uploadStatusEl.textContent = \`Error: \${result.message || "Upload failed"}\`;
+        }
+      } else {
+        let msg = "Upload failed";
+        try { msg = JSON.parse(xhr.responseText).message || msg; } catch {}
+        uploadStatusEl.style.color = "#e05";
+        uploadStatusEl.textContent = \`Error: \${msg}\`;
+      }
+      uploadBtn.disabled = false;
+    };
+    xhr.onerror = () => {
+      uploadStatusEl.style.color = "#e05";
+      uploadStatusEl.textContent = "Network error";
+      uploadBtn.disabled = false;
+    };
+    xhr.open("POST", "/comfymodal/models/upload");
+    xhr.send(formData);
+  };
+
+  uploadFileInput.addEventListener("change", () => {
+    uploadBtn.disabled = !(uploadFileInput.files && uploadFileInput.files[0]);
+  });
+
+  uploadSection.appendChild(uploadBtn);
+  modalSections.appendChild(uploadSection);
+  // ── end Upload Local File section ───────────────────────────────────
+
   panel.appendChild(modalSections);
 
   const localNotice = document.createElement("div");
