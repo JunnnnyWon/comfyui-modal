@@ -129,8 +129,7 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
         vol.commit()
         return {"status": "ok", "path": str(dest)}
 
-    # CivitAI download
-    if "civitai.com" in url:
+    if "civitai.com" in url or "civitai.red" in url:
         headers = {}
         if civitai_token:
             headers["Authorization"] = f"Bearer {civitai_token}"
@@ -149,8 +148,12 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
         vol.commit()
         return {"status": "ok", "path": str(dest)}
 
-    # Default: plain httpx download
-    with httpx.stream("GET", url, follow_redirects=True, timeout=1800) as r:
+    headers = {}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+    elif civitai_token:
+        headers["Authorization"] = f"Bearer {civitai_token}"
+    with httpx.stream("GET", url, follow_redirects=True, timeout=1800, headers=headers) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0))
         downloaded = 0
