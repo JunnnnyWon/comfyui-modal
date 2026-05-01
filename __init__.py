@@ -528,9 +528,28 @@ if _server:
 
     @_server.routes.post("/comfymodal/models/inject")
     async def modal_inject_placeholder(request: web.Request) -> web.Response:
+        import folder_paths as _fp
+
+        def _ensure_ext(name: str) -> str:
+            _SAFE_EXTS = {".ckpt", ".pt", ".pt2", ".bin", ".pth", ".safetensors", ".pkl", ".sft", ".gguf"}
+            from pathlib import Path as _P
+            if _P(name).suffix.lower() not in _SAFE_EXTS:
+                return name + ".safetensors"
+            return name
+
+        def _make_dummy(folder: str, filename: str):
+            filename = _ensure_ext(filename)
+            prefixed = f"modal-{filename}"
+            local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
+            os.makedirs(local_dir, exist_ok=True)
+            dest = os.path.join(local_dir, prefixed)
+            if not os.path.exists(dest):
+                open(dest, "wb").close()
+            _fp.filename_list_cache.pop(folder, None)
+            return {"status": "ok", "local_path": dest, "name": prefixed}
+
         body = await request.json()
 
-        # Support batch: {"items": [{folder, filename}, ...]}
         items = body.get("items")
         if items is not None:
             results = []
@@ -540,30 +559,16 @@ if _server:
                 if not folder or not filename:
                     results.append({"status": "error", "message": "folder and filename required"})
                     continue
-                prefixed = f"modal-{filename}"
-                local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
-                os.makedirs(local_dir, exist_ok=True)
-                dest = os.path.join(local_dir, prefixed)
-                if not os.path.exists(dest):
-                    open(dest, "wb").close()
-                results.append({"status": "ok", "local_path": dest, "name": prefixed})
+                results.append(_make_dummy(folder, filename))
             return web.json_response({"status": "ok", "results": results})
 
-        # Single item (backward compat): {"folder": "...", "filename": "..."}
         folder = os.path.basename(body.get("folder", ""))
         filename = os.path.basename(body.get("filename", ""))
         if not folder or not filename:
             return web.json_response({"status": "error", "message": "folder and filename required"}, status=400)
 
-        prefixed = f"modal-{filename}"
-        local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
-        os.makedirs(local_dir, exist_ok=True)
-        dest = os.path.join(local_dir, prefixed)
-
-        if not os.path.exists(dest):
-            open(dest, "wb").close()
-
-        return web.json_response({"status": "ok", "local_path": dest, "name": prefixed})
+        result = _make_dummy(folder, filename)
+        return web.json_response(result)
 
     @_server.routes.get("/comfymodal/models")
     async def modal_list_models(request: web.Request) -> web.Response:

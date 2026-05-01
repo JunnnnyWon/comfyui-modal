@@ -905,11 +905,21 @@ function buildPanel() {
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
     let filename = "";
     try {
-      const parts = new URL(url).pathname.split("/");
+      const parsed = new URL(url);
+      const parts = parsed.pathname.split("/");
       const name = parts.filter(Boolean).pop() || "";
       if (name) filename = decodeURIComponent(name);
+      if (filename && !filename.includes(".")) {
+        const fmt = (parsed.searchParams.get("format") || "").toLowerCase();
+        const typeParam = (parsed.searchParams.get("type") || "").toLowerCase();
+        if (fmt === "safetensor" || fmt === "safetensors") filename += ".safetensors";
+        else if (fmt === "pickletensor" || typeParam === "lora") filename += ".safetensors";
+        else if (fmt === "gguf") filename += ".gguf";
+        else if (fmt === "pt") filename += ".pt";
+        else filename += ".safetensors";
+      }
     } catch {}
-    if (!filename) filename = "model_" + Date.now();
+    if (!filename) filename = "model_" + Date.now() + ".safetensors";
     const folder = folderSelect.value;
     const entry = { id: Date.now() + Math.random(), url, filename, folder, state: "queued" };
     downloadQueue.push(entry);
