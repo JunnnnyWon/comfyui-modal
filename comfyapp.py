@@ -82,6 +82,24 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
     import httpx
     from pathlib import Path
 
+    _SAFE_EXTS = {".ckpt", ".pt", ".pt2", ".bin", ".pth", ".safetensors", ".pkl", ".sft", ".gguf"}
+    if Path(filename).suffix.lower() not in _SAFE_EXTS:
+        params = {}
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(url).query)
+            fmt = (qs.get("format", [""])[0]).lower()
+        except Exception:
+            fmt = ""
+        if fmt in ("safetensor", "safetensors"):
+            filename += ".safetensors"
+        elif fmt == "gguf":
+            filename += ".gguf"
+        elif fmt == "pt":
+            filename += ".pt"
+        else:
+            filename += ".safetensors"
+
     dest = Path(MODELS_PATH) / save_path / filename
     dest.parent.mkdir(parents=True, exist_ok=True)
 
