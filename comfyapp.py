@@ -133,20 +133,33 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
         headers = {}
         if civitai_token:
             headers["Authorization"] = f"Bearer {civitai_token}"
-        with httpx.stream("GET", url, follow_redirects=True, timeout=1800, headers=headers) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 0))
-            downloaded = 0
-            with open(dest, "wb") as f:
-                for chunk in r.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = downloaded / total * 100
-                        sys.stdout.write(f"\r  {pct:.1f}%  ({downloaded // 1024**2} MB / {total // 1024**2} MB)")
-                        sys.stdout.flush()
-        vol.commit()
-        return {"status": "ok", "path": str(dest)}
+        civitai_urls = [url]
+        if "civitai.red" in url:
+            civitai_urls.append(url.replace("civitai.red", "civitai.com"))
+        last_err = None
+        for attempt_url in civitai_urls:
+            try:
+                with httpx.stream("GET", attempt_url, follow_redirects=True, timeout=1800, headers=headers) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get("content-length", 0))
+                    downloaded = 0
+                    with open(dest, "wb") as f:
+                        for chunk in r.iter_bytes(chunk_size=65536):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                pct = downloaded / total * 100
+                                sys.stdout.write(f"\r  {pct:.1f}%  ({downloaded // 1024**2} MB / {total // 1024**2} MB)")
+                                sys.stdout.flush()
+                vol.commit()
+                return {"status": "ok", "path": str(dest)}
+            except httpx.HTTPStatusError as e:
+                last_err = e
+                if e.response.status_code < 500:
+                    raise Exception(f"Download failed ({e.response.status_code}): {attempt_url}") from None
+                print(f"\n  Mirror returned {e.response.status_code}, retrying origin...")
+                continue
+        raise Exception(f"Download failed: all CivitAI URLs returned server error. Last URL: {civitai_urls[-1]}, status: {last_err.response.status_code if last_err else 'unknown'}") from None
 
     headers = {}
     if hf_token:
