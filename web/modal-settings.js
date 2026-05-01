@@ -891,55 +891,37 @@ function buildPanel() {
     folderSelect.appendChild(opt);
   }
 
-  const filenameInput = document.createElement("input");
-  filenameInput.type = "text";
-  filenameInput.placeholder = "filename.safetensors";
-  filenameInput.style.cssText = inputStyle() + "flex:2;";
-
   row2.appendChild(folderSelect);
-  row2.appendChild(filenameInput);
   addSection.appendChild(row2);
 
   const addToQueueBtn = document.createElement("button");
   addToQueueBtn.textContent = "+ Add to Queue";
   addToQueueBtn.style.cssText = btnStyle();
   addToQueueBtn.style.width = "100%";
-  urlInput.addEventListener("blur", () => {
-    const url = urlInput.value.trim();
-    if (!url || filenameInput.value.trim()) return;
-    try {
-      const parts = new URL(url).pathname.split("/");
-      const name = parts.filter(Boolean).pop() || "";
-      if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
-    } catch {}
-  });
 
   addToQueueBtn.onclick = () => {
     let url = urlInput.value.trim();
     if (!url) return;
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-    if (!filenameInput.value.trim()) {
-      try {
-        const parts = new URL(url).pathname.split("/");
-        const name = parts.filter(Boolean).pop() || "";
-        if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
-      } catch {}
-    }
-    const filename = filenameInput.value.trim();
+    let filename = "";
+    try {
+      const parts = new URL(url).pathname.split("/");
+      const name = parts.filter(Boolean).pop() || "";
+      if (name) filename = decodeURIComponent(name);
+    } catch {}
+    if (!filename) filename = "model_" + Date.now();
     const folder = folderSelect.value;
-    if (!url || !filename) return;
     const entry = { id: Date.now() + Math.random(), url, filename, folder, state: "queued" };
     downloadQueue.push(entry);
     const row = renderQueueItem(entry);
     queueListEl.appendChild(row);
     urlInput.value = "";
-    filenameInput.value = "";
     syncDownloadAllBtn();
   };
 
   const enterSubmit = (e) => { if (e.key === "Enter") addToQueueBtn.click(); };
   urlInput.addEventListener("keydown", enterSubmit);
-  filenameInput.addEventListener("keydown", enterSubmit);
+
 
   addSection.appendChild(addToQueueBtn);
 
@@ -1059,21 +1041,8 @@ function buildPanel() {
     uploadFolderSelect.appendChild(opt);
   }
 
-  const uploadFilenameInput = document.createElement("input");
-  uploadFilenameInput.type = "text";
-  uploadFilenameInput.placeholder = "filename (optional override)";
-  uploadFilenameInput.style.cssText = inputStyle() + "flex:2; margin:0;";
-
   uploadRow2.appendChild(uploadFolderSelect);
-  uploadRow2.appendChild(uploadFilenameInput);
   uploadSection.appendChild(uploadRow2);
-
-  // Auto-fill filename from selected file
-  uploadFileInput.addEventListener("change", () => {
-    if (uploadFileInput.files && uploadFileInput.files[0] && !uploadFilenameInput.value.trim()) {
-      uploadFilenameInput.value = uploadFileInput.files[0].name;
-    }
-  });
 
   // Progress bar
   const uploadProgressWrap = document.createElement("div");
@@ -1095,7 +1064,7 @@ function buildPanel() {
     const file = uploadFileInput.files && uploadFileInput.files[0];
     if (!file) return;
     const folder = uploadFolderSelect.value;
-    const filename = uploadFilenameInput.value.trim() || file.name;
+    const filename = file.name;
 
     uploadBtn.disabled = true;
     uploadProgressWrap.style.display = "block";
@@ -1125,7 +1094,6 @@ function buildPanel() {
           uploadStatusEl.style.color = "#7ed321";
           uploadStatusEl.textContent = `✓ Uploaded ${filename} to ${folder}`;
           uploadFileInput.value = "";
-          uploadFilenameInput.value = "";
           await loadModels();
         } else {
           uploadStatusEl.style.color = "#e05";
