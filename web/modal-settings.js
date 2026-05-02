@@ -1211,26 +1211,31 @@ function buildWorkflowSection() {
   async function extractWorkflowFromPng(file) {
     const buf = await file.arrayBuffer();
     const t = new Uint8Array(buf);
-    const n = new DataView(t.buffer);
-    if (n.getUint32(0) !== 0x89504e47) return null;
+    const dv = new DataView(t.buffer);
+    const latin1 = new TextDecoder("latin1");
+    const utf8 = new TextDecoder("utf-8");
+    if (dv.getUint32(0) !== 0x89504e47) return null;
     let r = 8;
     const meta = {};
-    while (r < t.length) {
-      const len = n.getUint32(r);
-      const type = String.fromCharCode(...t.slice(r + 4, r + 8));
+    while (r + 12 <= t.length) {
+      const len = dv.getUint32(r);
+      const type = latin1.decode(t.slice(r + 4, r + 8));
+      if (type === "IEND") break;
       if (type === "tEXt" || type === "comf" || type === "iTXt") {
         let keyEnd = r + 8;
-        while (t[keyEnd] !== 0) keyEnd++;
-        const key = String.fromCharCode(...t.slice(r + 8, keyEnd));
+        while (keyEnd < r + 8 + len && t[keyEnd] !== 0) keyEnd++;
+        const key = latin1.decode(t.slice(r + 8, keyEnd));
         let valStart = keyEnd + 1;
         if (type === "iTXt") {
           valStart += 2;
-          while (t[valStart] !== 0 && valStart < r + 8 + len) valStart++;
+          while (valStart < r + 8 + len && t[valStart] !== 0) valStart++;
           valStart++;
-          while (t[valStart] !== 0 && valStart < r + 8 + len) valStart++;
+          while (valStart < r + 8 + len && t[valStart] !== 0) valStart++;
           valStart++;
         }
-        meta[key] = new TextDecoder("utf-8").decode(t.slice(valStart, r + 8 + len));
+        if (valStart < r + 8 + len) {
+          meta[key] = utf8.decode(t.slice(valStart, r + 8 + len));
+        }
       }
       r += 12 + len;
     }
