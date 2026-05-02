@@ -1210,27 +1210,17 @@ function buildWorkflowSection() {
 
   const fileInput = document.createElement("input");
   fileInput.type = "file";
-  fileInput.accept = ".json";
+  fileInput.accept = ".json,image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff";
+  fileInput.multiple = true;
   fileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
   section.appendChild(fileInput);
 
-  const imageFilesLabel = document.createElement("div");
-  imageFilesLabel.style.cssText = "font-size:11px; color:#888; display:none;";
-  imageFilesLabel.textContent = "📷 Attach images for LoadImage nodes:";
-  section.appendChild(imageFilesLabel);
-
-  const imageFilesInput = document.createElement("input");
-  imageFilesInput.type = "file";
-  imageFilesInput.accept = "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff";
-  imageFilesInput.multiple = true;
-  imageFilesInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box; display:none;";
-  section.appendChild(imageFilesInput);
-
   const imageStatusEl = document.createElement("div");
-  imageStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px; display:none;";
+  imageStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
   section.appendChild(imageStatusEl);
 
   let _detectedImageNodes = [];
+  let _selectedImages = [];
 
   const analyzeBtn = document.createElement("button");
   analyzeBtn.textContent = "Analyze Workflow";
@@ -1334,11 +1324,19 @@ function buildWorkflowSection() {
   };
 
   fileInput.addEventListener("change", () => {
-    analyzeBtn.disabled = !fileInput.files || !fileInput.files[0];
+    const files = Array.from(fileInput.files || []);
+    const jsonFile = files.find(f => f.name.endsWith(".json"));
+    _selectedImages = files.filter(f => !f.name.endsWith(".json"));
+    analyzeBtn.disabled = !jsonFile;
+    if (_selectedImages.length > 0) {
+      imageStatusEl.textContent = `📷 ${_selectedImages.length} image(s) selected: ${_selectedImages.map(f => f.name).join(", ")}`;
+    } else {
+      imageStatusEl.textContent = "";
+    }
   });
 
   analyzeBtn.onclick = async () => {
-    const file = fileInput.files && fileInput.files[0];
+    const file = Array.from(fileInput.files || []).find(f => f.name.endsWith(".json"));
     if (!file) return;
 
     analyzeBtn.disabled = true;
@@ -1384,15 +1382,10 @@ function buildWorkflowSection() {
       }
 
       if (_detectedImageNodes.length > 0) {
-        imageFilesLabel.textContent = `📷 LoadImage nodes detected (${_detectedImageNodes.join(", ")}). Attach image files:`;
-        imageFilesLabel.style.display = "block";
-        imageFilesInput.style.display = "block";
-        imageStatusEl.style.display = "block";
-        imageStatusEl.textContent = "Images will be uploaded to Modal volume on Build.";
-      } else {
-        imageFilesLabel.style.display = "none";
-        imageFilesInput.style.display = "none";
-        imageStatusEl.style.display = "none";
+        const hint = `📷 LoadImage detected: ${_detectedImageNodes.join(", ")} — select images in the file picker above.`;
+        imageStatusEl.textContent = _selectedImages.length > 0
+          ? `📷 ${_selectedImages.length} image(s) selected (${_selectedImages.map(f => f.name).join(", ")})`
+          : hint;
       }
 
       const missingCount = missing_packages.length;
@@ -1438,9 +1431,9 @@ function buildWorkflowSection() {
 
     try {
       const images = [];
-      if (imageFilesInput.files && imageFilesInput.files.length > 0) {
+      if (_selectedImages.length > 0) {
         buildStatusEl.textContent = "Encoding images...";
-        for (const imgFile of imageFilesInput.files) {
+        for (const imgFile of _selectedImages) {
           const ab = await imgFile.arrayBuffer();
           const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
           images.push({ filename: imgFile.name, data: b64 });
