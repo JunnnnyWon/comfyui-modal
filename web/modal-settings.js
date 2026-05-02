@@ -1208,41 +1208,102 @@ function buildWorkflowSection() {
   headerRow.appendChild(resetBtn);
   section.appendChild(headerRow);
 
-  const jsonLabel = document.createElement("div");
-  jsonLabel.style.cssText = "font-size:11px; color:#666;";
-  jsonLabel.textContent = "Workflow JSON:";
-  section.appendChild(jsonLabel);
+  async function extractWorkflowFromPng(file) {
+    const buf = await file.arrayBuffer();
+    const t = new Uint8Array(buf);
+    const n = new DataView(t.buffer);
+    if (n.getUint32(0) !== 0x89504e47) return null;
+    let r = 8;
+    const meta = {};
+    while (r < t.length) {
+      const len = n.getUint32(r);
+      const type = String.fromCharCode(...t.slice(r + 4, r + 8));
+      if (type === "tEXt" || type === "comf" || type === "iTXt") {
+        let keyEnd = r + 8;
+        while (t[keyEnd] !== 0) keyEnd++;
+        const key = String.fromCharCode(...t.slice(r + 8, keyEnd));
+        let valStart = keyEnd + 1;
+        if (type === "iTXt") {
+          valStart += 2;
+          while (t[valStart] !== 0 && valStart < r + 8 + len) valStart++;
+          valStart++;
+          while (t[valStart] !== 0 && valStart < r + 8 + len) valStart++;
+          valStart++;
+        }
+        meta[key] = new TextDecoder("utf-8").decode(t.slice(valStart, r + 8 + len));
+      }
+      r += 12 + len;
+    }
+    const raw = meta["workflow"] || meta["prompt"] || meta["parameters"];
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
 
-  const fileInput = document.createElement("input");
-  fileInput.type = "file";
-  fileInput.accept = ".json";
-  fileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
-  section.appendChild(fileInput);
-
-  const imgLabel = document.createElement("div");
-  imgLabel.style.cssText = "font-size:11px; color:#666; margin-top:4px;";
-  imgLabel.textContent = "Images for LoadImage nodes (optional):";
-  section.appendChild(imgLabel);
+  const fileLabel = document.createElement("div");
+  fileLabel.style.cssText = "font-size:11px; color:#888; margin-bottom:2px;";
+  fileLabel.textContent = "Drop images (PNG with embedded workflow) or JSON:";
+  section.appendChild(fileLabel);
 
   const imageFilesInput = document.createElement("input");
   imageFilesInput.type = "file";
-  imageFilesInput.accept = "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff";
+  imageFilesInput.accept = "image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp,.json";
   imageFilesInput.multiple = true;
   imageFilesInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
   section.appendChild(imageFilesInput);
 
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.style.display = "none";
+  section.appendChild(fileInput);
+
   const imageStatusEl = document.createElement("div");
-  imageStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
+  imageStatusEl.style.cssText = "font-size:11px; min-height:14px;";
   section.appendChild(imageStatusEl);
 
   let _detectedImageNodes = [];
   let _selectedImages = [];
+  let _embeddedWorkflow = null;
 
-  imageFilesInput.addEventListener("change", () => {
-    _selectedImages = Array.from(imageFilesInput.files || []);
-    imageStatusEl.textContent = _selectedImages.length > 0
-      ? `📷 ${_selectedImages.length} image(s): ${_selectedImages.map(f => f.name).join(", ")}`
-      : "";
+  imageFilesInput.addEventListener("change", async () => {
+    const files = Array.from(imageFilesInput.files || []);
+    const jsonFile = files.find(f => f.name.toLowerCase().endsWith(".json"));
+    const imageFiles = files.filter(f => !f.name.toLowerCase().endsWith(".json"));
+    _selectedImages = imageFiles;
+    _embeddedWorkflow = null;
+
+    if (jsonFile) {
+      try {
+        const text = await jsonFile.text();
+        _embeddedWorkflow = JSON.parse(text);
+        imageStatusEl.style.color = "#7ed321";
+        imageStatusEl.textContent = `✓ Workflow JSON loaded (${jsonFile.name})`;
+        analyzeBtn.disabled = false;
+      } catch {
+        imageStatusEl.style.color = "#e05";
+        imageStatusEl.textContent = "✗ Invalid JSON file";
+        analyzeBtn.disabled = true;
+      }
+    } else if (imageFiles.length > 0) {
+      imageStatusEl.style.color = "#f5a623";
+      imageStatusEl.textContent = "🔍 Reading workflow from image...";
+      for (const img of imageFiles) {
+        const wf = await extractWorkflowFromPng(img);
+        if (wf) {
+          _embeddedWorkflow = wf;
+          imageStatusEl.style.color = "#7ed321";
+          imageStatusEl.textContent = `✓ Workflow found in ${img.name} — ${imageFiles.length} image(s) selected`;
+          analyzeBtn.disabled = false;
+          return;
+        }
+      }
+      imageStatusEl.style.color = "#f5a623";
+      imageStatusEl.textContent = `📷 ${imageFiles.length} image(s) selected (no embedded workflow — add JSON separately)`;
+      analyzeBtn.disabled = true;
+    } else {
+      imageStatusEl.textContent = "";
+      analyzeBtn.disabled = true;
+    }
   });
 
   const analyzeBtn = document.createElement("button");
@@ -1351,8 +1412,7 @@ function buildWorkflowSection() {
   });
 
   analyzeBtn.onclick = async () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
+    if (!_embeddedWorkflow) return;
 
     analyzeBtn.disabled = true;
     analyzeBtn.textContent = "Analyzing...";
@@ -1360,13 +1420,7 @@ function buildWorkflowSection() {
     analyzeStatusEl.textContent = "Fetching comfyui-manager DB...";
 
     try {
-      const text = await file.text();
-      let workflow;
-      try {
-        workflow = JSON.parse(text);
-      } catch {
-        throw new Error("Invalid JSON file");
-      }
+      const workflow = _embeddedWorkflow;
 
       const r = await api.fetchApi(`${MODAL_PREFIX}/workflow/analyze`, {
         method: "POST",
