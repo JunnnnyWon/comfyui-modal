@@ -1511,8 +1511,13 @@ function buildWorkflowSection() {
         buildStatusEl.textContent = "Encoding images...";
         for (const imgFile of _selectedImages) {
           const ab = await imgFile.arrayBuffer();
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
-          images.push({ filename: imgFile.name, data: b64 });
+          const bytes = new Uint8Array(ab);
+          let b64 = "";
+          const chunk = 8192;
+          for (let i = 0; i < bytes.length; i += chunk) {
+            b64 += String.fromCharCode(...bytes.subarray(i, i + chunk));
+          }
+          images.push({ filename: imgFile.name, data: btoa(b64) });
         }
       }
 
