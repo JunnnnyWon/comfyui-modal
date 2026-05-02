@@ -1208,12 +1208,28 @@ function buildWorkflowSection() {
   headerRow.appendChild(resetBtn);
   section.appendChild(headerRow);
 
+  const jsonLabel = document.createElement("div");
+  jsonLabel.style.cssText = "font-size:11px; color:#666;";
+  jsonLabel.textContent = "Workflow JSON:";
+  section.appendChild(jsonLabel);
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
-  fileInput.accept = ".json,image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff";
-  fileInput.multiple = true;
+  fileInput.accept = ".json";
   fileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
   section.appendChild(fileInput);
+
+  const imgLabel = document.createElement("div");
+  imgLabel.style.cssText = "font-size:11px; color:#666; margin-top:4px;";
+  imgLabel.textContent = "Images for LoadImage nodes (optional):";
+  section.appendChild(imgLabel);
+
+  const imageFilesInput = document.createElement("input");
+  imageFilesInput.type = "file";
+  imageFilesInput.accept = "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tiff";
+  imageFilesInput.multiple = true;
+  imageFilesInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
+  section.appendChild(imageFilesInput);
 
   const imageStatusEl = document.createElement("div");
   imageStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px;";
@@ -1221,6 +1237,13 @@ function buildWorkflowSection() {
 
   let _detectedImageNodes = [];
   let _selectedImages = [];
+
+  imageFilesInput.addEventListener("change", () => {
+    _selectedImages = Array.from(imageFilesInput.files || []);
+    imageStatusEl.textContent = _selectedImages.length > 0
+      ? `📷 ${_selectedImages.length} image(s): ${_selectedImages.map(f => f.name).join(", ")}`
+      : "";
+  });
 
   const analyzeBtn = document.createElement("button");
   analyzeBtn.textContent = "Analyze Workflow";
@@ -1324,19 +1347,11 @@ function buildWorkflowSection() {
   };
 
   fileInput.addEventListener("change", () => {
-    const files = Array.from(fileInput.files || []);
-    const jsonFile = files.find(f => f.name.endsWith(".json"));
-    _selectedImages = files.filter(f => !f.name.endsWith(".json"));
-    analyzeBtn.disabled = !jsonFile;
-    if (_selectedImages.length > 0) {
-      imageStatusEl.textContent = `📷 ${_selectedImages.length} image(s) selected: ${_selectedImages.map(f => f.name).join(", ")}`;
-    } else {
-      imageStatusEl.textContent = "";
-    }
+    analyzeBtn.disabled = !fileInput.files || !fileInput.files[0];
   });
 
   analyzeBtn.onclick = async () => {
-    const file = Array.from(fileInput.files || []).find(f => f.name.endsWith(".json"));
+    const file = fileInput.files && fileInput.files[0];
     if (!file) return;
 
     analyzeBtn.disabled = true;
