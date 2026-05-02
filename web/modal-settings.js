@@ -1410,6 +1410,7 @@ function buildWorkflowSection() {
       if (unmatchedCount > 0) msg += ` ${unmatchedCount} type(s) unmatched.`;
       analyzeStatusEl.style.color = missingCount > 0 ? "#f5a623" : "#7ed321";
       analyzeStatusEl.textContent = msg;
+      analyzeStatusEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
       urlInput.style.display = "block";
       addUrlBtn.style.display = "block";
@@ -1418,6 +1419,7 @@ function buildWorkflowSection() {
     } catch (e) {
       analyzeStatusEl.style.color = "#e05";
       analyzeStatusEl.textContent = `Error: ${e.message}`;
+      analyzeStatusEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
     analyzeBtn.disabled = false;
