@@ -1214,6 +1214,24 @@ function buildWorkflowSection() {
   fileInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box;";
   section.appendChild(fileInput);
 
+  const imageFilesLabel = document.createElement("div");
+  imageFilesLabel.style.cssText = "font-size:11px; color:#888; display:none;";
+  imageFilesLabel.textContent = "📷 Attach images for LoadImage nodes:";
+  section.appendChild(imageFilesLabel);
+
+  const imageFilesInput = document.createElement("input");
+  imageFilesInput.type = "file";
+  imageFilesInput.accept = "image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff";
+  imageFilesInput.multiple = true;
+  imageFilesInput.style.cssText = "font-size:11px; color:#aaa; width:100%; box-sizing:border-box; display:none;";
+  section.appendChild(imageFilesInput);
+
+  const imageStatusEl = document.createElement("div");
+  imageStatusEl.style.cssText = "font-size:11px; color:#888; min-height:14px; display:none;";
+  section.appendChild(imageStatusEl);
+
+  let _detectedImageNodes = [];
+
   const analyzeBtn = document.createElement("button");
   analyzeBtn.textContent = "Analyze Workflow";
   analyzeBtn.disabled = true;
@@ -1354,6 +1372,29 @@ function buildWorkflowSection() {
 
       renderPackages(pendingNodes, missingRefs);
 
+      _detectedImageNodes = [];
+      const wfNodes = workflow.nodes || Object.values(workflow).filter(v => v && v.class_type);
+      for (const n of wfNodes) {
+        const t = n.type || n.class_type;
+        if (t === "LoadImage") {
+          const fname = (n.inputs || []).find?.(i => i.name === "image")?.widget_value
+            || (n.widgets_values && n.widgets_values[0]);
+          if (fname && typeof fname === "string") _detectedImageNodes.push(fname);
+        }
+      }
+
+      if (_detectedImageNodes.length > 0) {
+        imageFilesLabel.textContent = `📷 LoadImage nodes detected (${_detectedImageNodes.join(", ")}). Attach image files:`;
+        imageFilesLabel.style.display = "block";
+        imageFilesInput.style.display = "block";
+        imageStatusEl.style.display = "block";
+        imageStatusEl.textContent = "Images will be uploaded to Modal volume on Build.";
+      } else {
+        imageFilesLabel.style.display = "none";
+        imageFilesInput.style.display = "none";
+        imageStatusEl.style.display = "none";
+      }
+
       const missingCount = missing_packages.length;
       const unmatchedCount = summary.unmatched_types ? summary.unmatched_types.length : 0;
       let msg = `Found ${summary.custom_types} custom type(s). `;
@@ -1396,15 +1437,26 @@ function buildWorkflowSection() {
     buildStatusEl.textContent = "Saving nodes and triggering deploy...";
 
     try {
+      const images = [];
+      if (imageFilesInput.files && imageFilesInput.files.length > 0) {
+        buildStatusEl.textContent = "Encoding images...";
+        for (const imgFile of imageFilesInput.files) {
+          const ab = await imgFile.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
+          images.push({ filename: imgFile.name, data: b64 });
+        }
+      }
+
       const r = await api.fetchApi(`${MODAL_PREFIX}/workflow/build`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nodes: pendingNodes }),
+        body: JSON.stringify({ nodes: pendingNodes, images }),
       });
       const data = await r.json();
       if (data.status !== "ok") throw new Error(data.message || "Build failed");
       buildStatusEl.style.color = "#7ed321";
-      buildStatusEl.textContent = `✓ Deploy started with ${data.nodes.length} package(s).`;
+      const imgNote = images.length > 0 ? ` + ${images.length} image(s)` : "";
+      buildStatusEl.textContent = `✓ Deploy started with ${data.nodes.length} package(s)${imgNote}.`;
       startDeployPoll();
     } catch (e) {
       buildStatusEl.style.color = "#e05";

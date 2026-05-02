@@ -544,7 +544,11 @@ if _server:
             os.makedirs(local_dir, exist_ok=True)
             dest = os.path.join(local_dir, prefixed)
             if not os.path.exists(dest):
-                open(dest, "wb").close()
+                import struct as _struct
+                _header_json = b'{}'
+                _header_len = _struct.pack('<Q', len(_header_json))
+                with open(dest, "wb") as _f:
+                    _f.write(_header_len + _header_json)
             _fp.filename_list_cache.pop(folder, None)
             return {"status": "ok", "local_path": dest, "name": prefixed}
 
@@ -648,7 +652,11 @@ if _server:
             os.makedirs(local_dir, exist_ok=True)
             dest = os.path.join(local_dir, prefixed)
             if not os.path.exists(dest):
-                open(dest, "wb").close()
+                import struct as _struct
+                _header_json = b'{}'
+                _header_len = _struct.pack('<Q', len(_header_json))
+                with open(dest, "wb") as _f:
+                    _f.write(_header_len + _header_json)
 
             return web.json_response({
                 "status": "ok",
@@ -840,10 +848,39 @@ if _server:
             if not isinstance(n, str):
                 return web.json_response({"status": "error", "message": "each node entry must be a string"}, status=400)
 
+        images = body.get("images", [])
+
         try:
             _save_nodes_json_local(nodes)
         except Exception as e:
             return web.json_response({"status": "error", "message": f"Failed to save nodes.json: {e}"}, status=500)
+
+        if images:
+            try:
+                import modal as _modal_build
+                import base64 as _b64
+                _vol = _modal_build.Volume.from_name("comfyui-models", create_if_missing=True)
+                with _vol.batch_upload(force=True) as _upload:
+                    for img_item in images:
+                        img_filename = os.path.basename(img_item.get("filename", ""))
+                        img_data = img_item.get("data", "")
+                        if not img_filename or not img_data:
+                            continue
+                        import tempfile as _tmp
+                        _raw = _b64.b64decode(img_data)
+                        _fd, _tpath = _tmp.mkstemp(suffix="_img_upload")
+                        try:
+                            with os.fdopen(_fd, "wb") as _tf:
+                                _tf.write(_raw)
+                            _upload.put_file(_tpath, f"inputs/{img_filename}")
+                        finally:
+                            try:
+                                os.unlink(_tpath)
+                            except Exception:
+                                pass
+                print(f"[comfyui-modal] Uploaded {len(images)} image(s) to Modal volume inputs/")
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: could not upload images to Modal volume: {e}")
 
         try:
             from modal_client import save_nodes

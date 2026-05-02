@@ -5,7 +5,7 @@ import json
 import uuid
 import modal
 
-COMFYAPP_VERSION = "1.2.0"
+COMFYAPP_VERSION = "1.3.0"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -376,6 +376,16 @@ class _ComfyMixin:
 
     @modal.enter()
     def startup(self):
+        import os, shutil
+        inputs_vol = os.path.join(MODELS_PATH, "inputs")
+        comfy_input = "/root/comfy/ComfyUI/input"
+        if os.path.isdir(inputs_vol):
+            os.makedirs(comfy_input, exist_ok=True)
+            for fname in os.listdir(inputs_vol):
+                src = os.path.join(inputs_vol, fname)
+                dst = os.path.join(comfy_input, fname)
+                if os.path.isfile(src) and not os.path.exists(dst):
+                    shutil.copy2(src, dst)
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
              f"--port={COMFYUI_API_PORT}", "--disable-auto-launch"],
