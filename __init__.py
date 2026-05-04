@@ -704,6 +704,11 @@ if _server:
         token = tokens.get("civitai_token", "")
         return web.json_response({"has_token": bool(token), "masked": _mask_token(token) if token else ""})
 
+    @_server.routes.get("/modal-gpu")
+    async def serve_dashboard(request):
+        dashboard_path = os.path.join(os.path.dirname(__file__), "web", "dashboard.html")
+        return web.FileResponse(dashboard_path, headers={"Content-Type": "text/html; charset=utf-8"})
+
     # ── Workflow analyze / build ────────────────────────────────────────
 
     _NODES_JSON_PATH = os.path.join(_NODE_DIR, "nodes.json")
