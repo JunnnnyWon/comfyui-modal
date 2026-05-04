@@ -25,8 +25,10 @@ def _ensure_modal():
     except ImportError:
         pass
     print("[comfyui-modal] 'modal' package not found — installing...")
+    import platform
+    extra = ["--break-system-packages"] if platform.system() == "Darwin" else []
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "modal"],
+        [sys.executable, "-m", "pip", "install", "modal"] + extra,
         check=True,
     )
     print("[comfyui-modal] 'modal' installed successfully.")
@@ -724,22 +726,51 @@ if _server:
         with open(_NODES_JSON_PATH, "w") as f:
             json.dump(nodes, f, indent=2)
 
-    def _fetch_manager_db() -> list:
+    def _fetch_manager_db() -> tuple:
         import urllib.request as _ur
-        url = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
+        ext_map, node_list_db = {}, []
         try:
-            with _ur.urlopen(url, timeout=10) as r:
-                return json.load(r).get("custom_nodes", [])
+            with _ur.urlopen(
+                "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json",
+                timeout=10,
+            ) as r:
+                ext_map = json.load(r)
         except Exception:
-            return []
+            pass
+        try:
+            with _ur.urlopen(
+                "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json",
+                timeout=10,
+            ) as r:
+                node_list_db = json.load(r).get("custom_nodes", [])
+        except Exception:
+            pass
+        return ext_map, node_list_db
 
     def _classify_workflow_nodes(workflow: dict) -> dict:
         _BUILTIN_TYPES = {
-            "KSampler", "CLIPTextEncode", "CLIPLoader", "VAEDecode", "VAEEncode",
-            "VAELoader", "UNETLoader", "EmptyLatentImage", "LoadImage", "SaveImage",
+            "KSampler", "KSamplerAdvanced", "CLIPTextEncode", "CLIPLoader", "CLIPSetLastLayer",
+            "VAEDecode", "VAEEncode", "VAELoader", "VAEEncodeForInpaint",
+            "UNETLoader", "CheckpointLoaderSimple", "CheckpointLoader",
+            "EmptyLatentImage", "EmptySD3LatentImage", "LatentUpscale", "LatentUpscaleBy",
+            "LoadImage", "LoadImageMask", "SaveImage", "PreviewImage",
+            "ImageUpscaleWithModel", "ImageScale", "ImageScaleBy", "ImageInvert",
+            "UpscaleModelLoader",
+            "KSamplerSelect", "SamplerCustom", "SamplerCustomAdvanced",
+            "KarrasScheduler", "PolyexponentialScheduler", "SDTurboScheduler",
+            "SplitSigmas", "FlipSigmas", "SetFirstSigma", "ExtendIntermediateSigmas",
+            "ConditioningCombine", "ConditioningConcat", "ConditioningSetArea",
+            "ConditioningSetMask", "ConditioningZeroOut", "ConditioningSetTimestepRange",
+            "ControlNetApply", "ControlNetApplyAdvanced", "ControlNetLoader",
+            "LoraLoader", "LoraLoaderModelOnly",
             "ImageQuantize", "ImageSharpen", "AdjustContrast", "Morphology", "SolidMask",
-            "Note", "PrimitiveBoolean", "PrimitiveFloat", "PrimitiveInt",
-            "StringConcatenate", "RegexReplace", "StringReplace", "StringSubstring",
+            "ImageCompositeMasked", "ImageBlend", "ImagePadForOutpaint",
+            "MaskToImage", "ImageToMask", "InvertMask", "FeatherMask", "GrowMask",
+            "Note", "PrimitiveNode", "Reroute",
+            "PrimitiveBoolean", "PrimitiveFloat", "PrimitiveInt",
+            "PrimitiveString", "PrimitiveStringMultiline",
+            "StringConcatenate", "RegexReplace", "StringReplace", "StringSubstring", "StringTrim",
+            "ImageAddNoise",
         }
 
         nodes_list = []
@@ -770,20 +801,44 @@ if _server:
             "custom_types": sorted(custom_types),
         }
 
-    def _match_nodes_to_packages(custom_types: list, db: list) -> dict:
-        _type_map = {}
-        for entry in db:
-            patterns = entry.get("nodename_pattern", "") or ""
-            if patterns:
-                for p in [x.strip() for x in patterns.split(",") if x.strip()]:
-                    _type_map[p] = entry
+    def _match_nodes_to_packages(custom_types: list, ext_map: dict, node_list_db: list) -> tuple:
+        import re as _re
+
+        _COMFYUI_CORE_REPO = "https://github.com/comfyanonymous/ComfyUI"
+
+        exact_map = {}
+        for repo_url, data in ext_map.items():
+            node_names = data[0] if isinstance(data, list) and data else []
+            for name in node_names:
+                if isinstance(name, str) and name not in exact_map:
+                    exact_map[name] = repo_url
+
+        regex_entries = []
+        for entry in node_list_db:
+            raw = (entry.get("nodename_pattern") or "").strip()
+            if raw:
+                try:
+                    regex_entries.append((_re.compile(raw), entry.get("reference", ""), entry.get("title", "")))
+                except _re.error:
+                    pass
 
         result = {}
         unmatched = []
         for ct in custom_types:
-            if ct in _type_map:
-                e = _type_map[ct]
-                result[ct] = {"package": e.get("title", ""), "reference": e.get("reference", "")}
+            repo = exact_map.get(ct)
+            if repo and repo != _COMFYUI_CORE_REPO:
+                result[ct] = {"package": ct, "reference": repo}
+                continue
+            if repo == _COMFYUI_CORE_REPO:
+                continue
+
+            matched_entry = None
+            for pattern, ref, title in regex_entries:
+                if pattern.search(ct):
+                    matched_entry = {"package": title, "reference": ref}
+                    break
+            if matched_entry:
+                result[ct] = matched_entry
             else:
                 result[ct] = None
                 unmatched.append(ct)
@@ -805,9 +860,9 @@ if _server:
         custom_types = classified["custom_types"]
 
         loop = asyncio.get_event_loop()
-        db = await loop.run_in_executor(None, _fetch_manager_db)
+        ext_map, node_list_db = await loop.run_in_executor(None, _fetch_manager_db)
 
-        type_to_package, unmatched = _match_nodes_to_packages(custom_types, db)
+        type_to_package, unmatched = _match_nodes_to_packages(custom_types, ext_map, node_list_db)
 
         needed_packages = {}
         for ct, pkg in type_to_package.items():
