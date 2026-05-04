@@ -42,6 +42,18 @@ app.registerExtension({
         log("Intercepted /prompt POST → routing to Modal GPU");
         const body = JSON.parse(options.body);
         body.prompt = stripModalPrefix(body.prompt);
+
+        if (body.prompt && app.graph) {
+          for (const [nodeId, nodeDef] of Object.entries(body.prompt)) {
+            if (nodeDef && typeof nodeDef === "object" && !nodeDef.class_type) {
+              const graphNode = app.graph.getNodeById(parseInt(nodeId));
+              if (graphNode && graphNode.type) {
+                nodeDef.class_type = graphNode.type;
+                log(`Restored class_type for node ${nodeId}: ${graphNode.type}`);
+              }
+            }
+          }
+        }
         return _originalFetchApi(`${MODAL_PREFIX}/prompt`, {
           ...options,
           body: JSON.stringify(body),

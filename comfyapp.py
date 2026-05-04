@@ -576,6 +576,61 @@ class _ComfyMixin:
 
         return prompt
 
+    def _preprocess_workflow(self, workflow: dict) -> dict:
+        SINK_TYPES = {
+            "Fast Muter (rgthree)",
+            "Node Collector (rgthree)",
+            "Mute / Bypass Repeater (rgthree)",
+        }
+        PASSTHROUGH_TYPES = {"Reroute (rgthree)"}
+
+        def resolve_reroute(node_id: str, slot: int):
+            visited = set()
+            while node_id in workflow:
+                node = workflow[node_id]
+                if node.get("class_type") not in PASSTHROUGH_TYPES:
+                    break
+                if node_id in visited:
+                    break
+                visited.add(node_id)
+                inputs = node.get("inputs", {})
+                if not inputs:
+                    break
+                upstream = next(iter(inputs.values()))
+                if not (isinstance(upstream, list) and len(upstream) == 2):
+                    break
+                node_id = str(upstream[0])
+                slot = upstream[1]
+            return node_id, slot
+
+        reroute_ids = {nid for nid, node in workflow.items()
+                       if node.get("class_type") in PASSTHROUGH_TYPES}
+        sink_ids = {nid for nid, node in workflow.items()
+                    if node.get("class_type") in SINK_TYPES}
+        remove_ids = reroute_ids | sink_ids
+
+        import copy
+        result = {}
+        for nid, node in workflow.items():
+            if nid in remove_ids:
+                continue
+            node = copy.deepcopy(node)
+            inputs = node.get("inputs", {})
+            for key, val in list(inputs.items()):
+                if isinstance(val, list) and len(val) == 2:
+                    src_id = str(val[0])
+                    src_slot = val[1]
+                    if src_id in reroute_ids:
+                        real_src, real_slot = resolve_reroute(src_id, src_slot)
+                        if real_src not in remove_ids:
+                            inputs[key] = [real_src, real_slot]
+                        else:
+                            del inputs[key]
+                    elif src_id in sink_ids:
+                        del inputs[key]
+            result[nid] = node
+        return result
+
     @modal.method()
     def run_prompt(self, workflow: dict, input_images: dict = None) -> dict:
         import urllib.request
@@ -589,6 +644,7 @@ class _ComfyMixin:
                 dest = input_dir / Path(filename).name
                 dest.write_bytes(base64.b64decode(b64data))
 
+        workflow = self._preprocess_workflow(workflow)
         client_id = str(uuid.uuid4())
         payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
 
