@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Modal GPU Dashboard</title>
+  <style>
+    /* CSS Reset */
+    html, body {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    *, *:before, *:after {
+      box-sizing: inherit;
+    }
+
+    /* Base Theme */
+    body {
+      background-color: #1a1a1a;
+      color: #e0e0e0;
+      font-family: system-ui, -apple-system, sans-serif;
+      line-height: 1.5;
+    }
+
+    /* Header */
+    #header {
+      background-color: #242424;
+      padding: 16px 24px;
+      border-bottom: 1px solid #3a3a3a;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    #header h1 {
+      margin: 0;
+      font-size: 18px;
+      color: #e0e0e0;
+      letter-spacing: 0.5px;
+    }
+    #server-status {
+      font-size: 13px;
+      color: #888;
+      display: flex;
+      align-items: center;
+    }
+
+    /* Layout & App Mount */
+    #app {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    @media (min-width: 768px) {
+      .grid-2 {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    /* Cards */
+    .card {
+      background-color: #242424;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 0;
+      margin-bottom: 16px;
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 16px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: opacity 0.2s, background-color 0.2s;
+    }
+    .btn-primary {
+      background-color: #4a90e2;
+      color: #fff;
+    }
+    .btn-secondary {
+      background-color: #3a3a3a;
+      color: #e0e0e0;
+    }
+    .btn-danger {
+      background-color: #e05050;
+      color: #fff;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    /* Forms */
+    .input {
+      background-color: #2d2d2d;
+      border: 1px solid #3a3a3a;
+      color: #e0e0e0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .input:focus {
+      outline: none;
+      border-color: #4a90e2;
+    }
+    .select {
+      background-color: #2d2d2d;
+      border: 1px solid #3a3a3a;
+      color: #e0e0e0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      width: 100%;
+      margin-bottom: 12px;
+      appearance: none;
+    }
+    .select:focus {
+      outline: none;
+      border-color: #4a90e2;
+    }
+
+    /* Status Indicators */
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      display: inline-block;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .badge {
+      background-color: #3a3a3a;
+      color: #aaa;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      display: inline-block;
+      font-weight: 500;
+    }
+
+    /* Toasts */
+    #toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .toast {
+      background-color: #242424;
+      color: #e0e0e0;
+      padding: 12px 16px;
+      border-radius: 4px;
+      border-left: 4px solid #3a3a3a;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      font-size: 14px;
+      min-width: 250px;
+      animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* Collapsible */
+    .collapsible {
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      overflow: hidden;
+      background-color: #242424;
+    }
+    .collapsible-header {
+      padding: 12px 16px;
+      background-color: #2d2d2d;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 13px;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background-color 0.2s;
+    }
+    .collapsible-header:hover {
+      background-color: #3a3a3a;
+    }
+    .collapsible-body {
+      padding: 16px;
+      display: none;
+    }
+    .collapsible.active .collapsible-body {
+      display: block;
+    }
+
+    /* Progress Bar */
+    .progress-bar-wrap {
+      width: 100%;
+      height: 8px;
+      background-color: #2d2d2d;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+      border: 1px solid #3a3a3a;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background-color: #4a90e2;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* Model List */
+    .scrollable-list {
+      max-height: 300px;
+      overflow-y: auto;
+      background-color: #2d2d2d;
+      border-radius: 4px;
+      border: 1px solid #3a3a3a;
+    }
+    .scrollable-list::-webkit-scrollbar {
+      width: 8px;
+    }
+    .scrollable-list::-webkit-scrollbar-track {
+      background: #242424;
+    }
+    .scrollable-list::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 4px;
+    }
+    .scrollable-list::-webkit-scrollbar-thumb:hover {
+      background: #555;
+    }
+
+    /* Helpers */
+    .text-success { color: #7ed321; }
+    .text-error { color: #e05050; }
+    .text-warning { color: #f5a623; }
+    .text-muted { color: #888; }
+    .bg-success { background-color: #7ed321; }
+    .bg-error { background-color: #e05050; }
+    .bg-warning { background-color: #f5a623; }
+  </style>
+</head>
+<body>
+  <!-- Header bar -->
+  <header id="header">
+    <h1>Modal GPU Dashboard</h1>
+    <div id="server-status">
+      <span class="status-dot" style="background-color: #888;"></span>
+      Loading...
+    </div>
+  </header>
+  
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+  
+  <!-- Main app mount -->
+  <div id="app">
+    <div id="auth-section"></div>
+    <div id="main-section" style="display:none">
+      <div class="grid grid-2">
+        <div id="status-section"></div>
+        <div id="gpu-section"></div>
+      </div>
+      <div class="grid grid-2">
+        <div id="tokens-section"></div>
+        <div id="upload-section"></div>
+      </div>
+      <div class="grid grid-2">
+        <div id="models-section"></div>
+        <div id="add-model-section"></div>
+      </div>
+      <div id="workflow-section"></div>
+    </div>
+    <div id="onboarding-section"></div>
+  </div>
+  
+  <!-- Dashboard Script -->
+  <script type="module" src="/extensions/comfyui-modal/dashboard.js"></script>
+</body>
+</html>
