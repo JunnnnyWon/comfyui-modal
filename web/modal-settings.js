@@ -8,7 +8,27 @@ const MODAL_PREFIX = "/comfymodal";
 const FOLDERS = ["checkpoints", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"];
 
 // Folders available in the "Add Model" download dropdown
-const DOWNLOAD_FOLDERS = ["checkpoints", "diffusion_models", "loras", "vae", "controlnet", "upscale_models", "embeddings", "clip", "text_encoders"];
+const DOWNLOAD_FOLDERS = [
+  "checkpoints",
+  "diffusion_models",
+  "loras",
+  "vae",
+  "controlnet",
+  "upscale_models",
+  "embeddings",
+  "clip",
+  "text_encoders",
+  "model_patches",
+  "clip_vision",
+  "style_models",
+  "vae_approx",
+  "hypernetworks",
+  "gligen",
+  "photomaker",
+  "latent_upscale_models",
+  "audio_encoders",
+  "frame_interpolation",
+];
 
 const GPU_OPTIONS = [
   { value: "a10g",  label: "A10G  (24 GB) — recommended" },
