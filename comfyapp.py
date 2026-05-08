@@ -8,7 +8,7 @@ import modal
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.0.2"
+COMFYAPP_VERSION = "1.0.3"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -177,14 +177,21 @@ def list_models():
     min_containers=0,
     scaledown_window=2,
     volumes={MODELS_PATH: vol},
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
 )
+@modal.concurrent(max_inputs=4)
 class ComfyAPI:
-    @modal.enter()
+    @modal.enter(snap=True)
     def startup(self):
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
              f"--port={COMFYUI_API_PORT}", "--disable-auto-launch"],
         )
+        self._wait_for_comfy()
+
+    @modal.enter(snap=False)
+    def restore(self):
         self._wait_for_comfy()
 
     @modal.exit()
@@ -343,14 +350,21 @@ class ComfyAPI:
     min_containers=0,
     scaledown_window=2,
     volumes={MODELS_PATH: vol},
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
 )
+@modal.concurrent(max_inputs=4)
 class ComfyAPI_A100:
-    @modal.enter()
+    @modal.enter(snap=True)
     def startup(self):
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
              f"--port={COMFYUI_API_PORT}", "--disable-auto-launch"],
         )
+        self._wait_for_comfy()
+
+    @modal.enter(snap=False)
+    def restore(self):
         self._wait_for_comfy()
 
     @modal.exit()
@@ -509,14 +523,21 @@ class ComfyAPI_A100:
     min_containers=0,
     scaledown_window=2,
     volumes={MODELS_PATH: vol},
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
 )
+@modal.concurrent(max_inputs=4)
 class ComfyAPI_T4:
-    @modal.enter()
+    @modal.enter(snap=True)
     def startup(self):
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
              f"--port={COMFYUI_API_PORT}", "--disable-auto-launch"],
         )
+        self._wait_for_comfy()
+
+    @modal.enter(snap=False)
+    def restore(self):
         self._wait_for_comfy()
 
     @modal.exit()
