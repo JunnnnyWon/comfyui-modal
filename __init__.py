@@ -7,12 +7,23 @@ import base64
 import copy
 import threading
 import subprocess
+import time
 
 from aiohttp import web
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 WEB_DIRECTORY = "web"
+
+
+def _unique_path(directory: str, filename: str) -> str:
+    path = os.path.join(directory, filename)
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(filename)
+    suffix = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1_000_000) % 1_000_000:06d}"
+    return os.path.join(directory, f"{stem}_{suffix}{ext}")
+
 
 _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
@@ -299,7 +310,8 @@ async def _execute_job(item: tuple, item_id: int):
     for img in result.get("images", []):
         img_bytes = base64.b64decode(img["data"])
         local_filename = img["filename"]
-        local_path = os.path.join(output_dir, local_filename)
+        local_path = _unique_path(output_dir, local_filename)
+        local_filename = os.path.basename(local_path)
         with open(local_path, "wb") as f:
             f.write(img_bytes)
 
@@ -320,7 +332,8 @@ async def _execute_job(item: tuple, item_id: int):
     for vid in result.get("videos", []):
         vid_bytes = base64.b64decode(vid["data"])
         local_filename = vid["filename"]
-        local_path = os.path.join(output_dir, local_filename)
+        local_path = _unique_path(output_dir, local_filename)
+        local_filename = os.path.basename(local_path)
         with open(local_path, "wb") as f:
             f.write(vid_bytes)
 
