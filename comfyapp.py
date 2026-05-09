@@ -8,7 +8,7 @@ import modal
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.0.3"
+COMFYAPP_VERSION = "1.0.4"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
