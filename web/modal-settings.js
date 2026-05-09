@@ -808,6 +808,80 @@ function buildPanel() {
   localNotice.textContent = "Local mode: prompts go directly to ComfyUI. GPU routing is off.";
   panel.appendChild(localNotice);
 
+  const hfHr = document.createElement("div");
+  hfHr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
+  panel.appendChild(hfHr);
+
+  const hfSection = document.createElement("div");
+  hfSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
+
+  const hfTitle = document.createElement("div");
+  hfTitle.style.cssText = "font-weight:600; font-size:13px;";
+  hfTitle.textContent = "🤗 HuggingFace API Key";
+  hfSection.appendChild(hfTitle);
+
+  const hfDesc = document.createElement("div");
+  hfDesc.style.cssText = "font-size:11px; color:#888; line-height:1.5;";
+  hfDesc.textContent = "Required for downloading gated models. Saved locally.";
+  hfSection.appendChild(hfDesc);
+
+  const hfRow = document.createElement("div");
+  hfRow.style.cssText = "display:flex; gap:6px;";
+
+  const hfInput = document.createElement("input");
+  hfInput.type = "password";
+  hfInput.placeholder = "hf_...";
+  hfInput.style.cssText = inputStyle() + "flex:1;";
+
+  const hfSaveBtn = document.createElement("button");
+  hfSaveBtn.textContent = "Save";
+  hfSaveBtn.style.cssText = btnStyle();
+
+  hfRow.appendChild(hfInput);
+  hfRow.appendChild(hfSaveBtn);
+  hfSection.appendChild(hfRow);
+
+  const hfStatus = document.createElement("div");
+  hfStatus.style.cssText = "font-size:11px; color:#888; min-height:14px;";
+  hfSection.appendChild(hfStatus);
+
+  panel.appendChild(hfSection);
+
+  (async () => {
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/hf-token`);
+      const d = await r.json();
+      if (d.token) hfStatus.textContent = `Saved: ${d.token}`;
+    } catch {}
+  })();
+
+  hfSaveBtn.onclick = async () => {
+    const token = hfInput.value.trim();
+    hfStatus.textContent = "";
+    hfSaveBtn.disabled = true;
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/hf-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const d = await r.json();
+      if (d.status === "ok") {
+        hfStatus.style.color = "#5c9";
+        hfStatus.textContent = token ? "Saved ✓" : "Cleared";
+        hfInput.value = "";
+      } else {
+        hfStatus.style.color = "#e05";
+        hfStatus.textContent = d.message || "Error saving token.";
+      }
+    } catch (e) {
+      hfStatus.style.color = "#e05";
+      hfStatus.textContent = `Error: ${e.message}`;
+    }
+    hfSaveBtn.disabled = false;
+  };
+  hfInput.addEventListener("keydown", (e) => { if (e.key === "Enter") hfSaveBtn.click(); });
+
   function updateModalSections(enabled) {
     modalSections.style.display = enabled ? "flex" : "none";
     localNotice.style.display = enabled ? "none" : "block";

@@ -44,19 +44,19 @@ async def health_check() -> dict:
     return await loop.run_in_executor(None, _api().health.remote)
 
 
-async def download_model(url: str, filename: str, save_path: str = "checkpoints") -> dict:
+async def download_model(url: str, filename: str, save_path: str = "checkpoints", hf_token: str = "") -> dict:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: _download_fn.remote(url=url, filename=filename, save_path=save_path),
+        lambda: _download_fn.remote(url=url, filename=filename, save_path=save_path, hf_token=hf_token),
     )
 
 
-async def batch_download_models(items: list) -> list:
+async def batch_download_models(items: list, hf_token: str = "") -> list:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: _batch_download_fn.remote(items),
+        lambda: _batch_download_fn.remote(items, hf_token=hf_token),
     )
 
 
