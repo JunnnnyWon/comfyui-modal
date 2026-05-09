@@ -78,7 +78,7 @@ def ui():
     timeout=1800,
     volumes={MODELS_PATH: vol},
 )
-def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoints"):
+def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoints", hf_token: str = ""):
     import httpx
     from pathlib import Path
 
@@ -88,7 +88,11 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
     if dest.exists():
         return {"status": "ok", "skipped": True, "path": str(dest)}
 
-    with httpx.stream("GET", url, follow_redirects=True, timeout=1800) as r:
+    headers = {}
+    if hf_token and "huggingface.co" in url:
+        headers["Authorization"] = f"Bearer {hf_token}"
+
+    with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=1800) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0))
         downloaded = 0
@@ -112,10 +116,10 @@ def download_model_to_volume(url: str, filename: str, save_path: str = "checkpoi
     timeout=1800,
     volumes={MODELS_PATH: vol},
 )
-def batch_download_models(items: list) -> list:
+def batch_download_models(items: list, hf_token: str = "") -> list:
     results = list(
         download_model_to_volume.starmap(
-            [(item["url"], item["filename"], item.get("save_path", "checkpoints")) for item in items]
+            [(item["url"], item["filename"], item.get("save_path", "checkpoints"), hf_token) for item in items]
         )
     )
     return results

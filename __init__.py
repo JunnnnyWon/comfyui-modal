@@ -179,6 +179,18 @@ except ImportError:
 _COMFYUI_ROOT = os.path.dirname(os.path.dirname(_NODE_DIR))
 
 _MODAL_TOML_PATH = os.path.expanduser("~/.modal.toml")
+_HF_TOKEN_PATH = os.path.join(os.path.dirname(__file__), ".hf_token")
+
+def _read_hf_token() -> str:
+    try:
+        with open(_HF_TOKEN_PATH, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+def _write_hf_token(token: str):
+    with open(_HF_TOKEN_PATH, "w") as f:
+        f.write(token.strip())
 
 def _is_modal_token_set() -> bool:
     try:
@@ -362,6 +374,20 @@ if _server:
     async def modal_auth_status(request: web.Request) -> web.Response:
         return web.json_response({"connected": _is_modal_token_set()})
 
+    @_server.routes.get("/comfymodal/hf-token")
+    async def modal_hf_token_get(request: web.Request) -> web.Response:
+        token = _read_hf_token()
+        return web.json_response({"token": token[:8] + "..." if len(token) > 8 else ("set" if token else "")})
+
+    @_server.routes.post("/comfymodal/hf-token")
+    async def modal_hf_token_set(request: web.Request) -> web.Response:
+        body = await request.json()
+        token = body.get("token", "").strip()
+        if token and not token.startswith("hf_"):
+            return web.json_response({"status": "error", "message": "HF token must start with hf_"}, status=400)
+        _write_hf_token(token)
+        return web.json_response({"status": "ok"})
+
     @_server.routes.post("/comfymodal/auth/setup")
     async def modal_auth_setup(request: web.Request) -> web.Response:
         body = await request.json()
@@ -423,7 +449,7 @@ if _server:
             if not it.get("url") or not it.get("filename"):
                 return web.json_response({"status": "error", "message": "each item needs url and filename"}, status=400)
         try:
-            results = await batch_download_models(items)
+            results = await batch_download_models(items, hf_token=_read_hf_token())
             return web.json_response({"status": "ok", "results": results})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
@@ -442,7 +468,7 @@ if _server:
             )
 
         try:
-            result = await download_model(url=url, filename=filename, save_path=save_path)
+            result = await download_model(url=url, filename=filename, save_path=save_path, hf_token=_read_hf_token())
             return web.json_response({"status": "ok", **result})
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
