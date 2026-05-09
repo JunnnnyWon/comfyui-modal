@@ -3,3 +3,4 @@ __pycache__/
 *.pyo
 .deployed_version
 .env
+.hf_token
