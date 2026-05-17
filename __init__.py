@@ -87,6 +87,19 @@ def _find_modal_executable():
             return c
     return None
 
+def _scan_custom_nodes():
+    """Scan local custom nodes and write custom_nodes.json for the deploy."""
+    try:
+        from custom_node_scanner import scan_and_save
+        nodes = scan_and_save()
+        names = [n["name"] for n in nodes]
+        print(f"[comfyui-modal] Scanned {len(nodes)} custom nodes: {', '.join(names)}")
+        return nodes
+    except Exception as e:
+        print(f"[comfyui-modal] Warning: Could not scan custom nodes: {e}")
+        return []
+
+
 def _run_deploy_background():
     global _deploy_status
 
@@ -99,6 +112,10 @@ def _run_deploy_background():
         print(f"[comfyui-modal] {_deploy_status['message']}")
         return
 
+    # Scan local custom nodes before deploying
+    _deploy_status = {"state": "deploying", "message": "Scanning local custom nodes..."}
+    _scan_custom_nodes()
+
     _deploy_status = {"state": "deploying", "message": "Running modal deploy..."}
     print(f"[comfyui-modal] Deploying comfyapp.py (modal: {modal_cmd})")
 
@@ -109,7 +126,7 @@ def _run_deploy_background():
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=1800,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         if result.returncode == 0:
@@ -126,7 +143,7 @@ def _run_deploy_background():
             _deploy_status = {"state": "error", "message": msg}
             print(f"[comfyui-modal] {msg}")
     except subprocess.TimeoutExpired:
-        _deploy_status = {"state": "error", "message": "Deploy timed out (5 min)"}
+        _deploy_status = {"state": "error", "message": "Deploy timed out (30 min)"}
         print(f"[comfyui-modal] Deploy timed out")
     except Exception as e:
         _deploy_status = {"state": "error", "message": str(e)}
@@ -159,7 +176,7 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, list_installed_nodes, set_gpu, get_gpu
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
@@ -173,6 +190,7 @@ except ImportError:
     def batch_download_models(*a, **kw): raise RuntimeError("modal not installed")
     def list_models(*a, **kw): raise RuntimeError("modal not installed")
     def delete_model(*a, **kw): raise RuntimeError("modal not installed")
+    def list_installed_nodes(*a, **kw): raise RuntimeError("modal not installed")
     def set_gpu(gpu): pass
     def get_gpu(): return "a10g"
 
@@ -568,4 +586,27 @@ if _server:
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models")
+    @_server.routes.get("/comfymodal/nodes/list")
+    async def modal_nodes_list(request: web.Request) -> web.Response:
+        """Return the current custom_nodes.json content."""
+        json_path = os.path.join(_NODE_DIR, "custom_nodes.json")
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                import json as _json
+                data = _json.load(f)
+            return web.json_response(data)
+        except FileNotFoundError:
+            return web.json_response({"nodes": [], "message": "No custom_nodes.json yet. Deploy to generate."})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    @_server.routes.post("/comfymodal/nodes/scan")
+    async def modal_nodes_scan(request: web.Request) -> web.Response:
+        """Re-scan local custom nodes and write custom_nodes.json (does NOT deploy)."""
+        try:
+            nodes = _scan_custom_nodes()
+            return web.json_response({"status": "ok", "count": len(nodes), "nodes": nodes})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models, /comfymodal/nodes/list, /comfymodal/nodes/scan")

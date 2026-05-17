@@ -71,3 +71,8 @@ async def delete_model(folder: str, filename: str) -> dict:
         None,
         lambda: _api().delete_model.remote(folder=folder, filename=filename),
     )
+
+
+async def list_installed_nodes() -> dict:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _api().list_installed_nodes.remote)

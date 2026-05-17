@@ -4,3 +4,4 @@ __pycache__/
 .deployed_version
 .env
 .hf_token
+custom_nodes.json

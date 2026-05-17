@@ -607,40 +607,62 @@ function buildPanel() {
   panel.appendChild(hr);
 
   const modalSections = document.createElement("div");
-  modalSections.style.cssText = "display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden; min-height:0;";
+  modalSections.style.cssText = "display:flex; flex-direction:column; gap:0; flex:1; overflow-y:auto; min-height:0;";
 
-  const modelsSection = document.createElement("div");
-  modelsSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex:1; overflow:hidden; min-height:0;";
+  function makeCollapsible(title, contentEl, { startOpen = false, storageKey = null, extraHeaderEls = [] } = {}) {
+    const SKEY = storageKey ? `comfymodal_col_${storageKey}` : null;
+    let open = SKEY ? (localStorage.getItem(SKEY) ?? (startOpen ? "1" : "0")) === "1" : startOpen;
 
-  const listHeader = document.createElement("div");
-  listHeader.style.cssText = "display:flex; align-items:center; gap:6px; flex-shrink:0;";
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "flex-shrink:0; border-top:1px solid #3a3a3a;";
 
-  const listTitle = document.createElement("span");
-  listTitle.style.cssText = "font-weight:600; font-size:13px; flex:1;";
-  listTitle.textContent = "Models";
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex; align-items:center; gap:6px; padding:8px 0; cursor:pointer; user-select:none;";
+
+    const chevron = document.createElement("span");
+    chevron.style.cssText = "font-size:10px; color:#888; transition:transform .15s; flex-shrink:0; width:12px; text-align:center;";
+
+    const label = document.createElement("span");
+    label.style.cssText = "font-weight:600; font-size:13px; flex:1;";
+    label.textContent = title;
+
+    hdr.appendChild(chevron);
+    hdr.appendChild(label);
+    for (const el of extraHeaderEls) { el.style.flexShrink = "0"; hdr.appendChild(el); }
+
+    contentEl.style.overflow = "hidden";
+
+    function toggle(show) {
+      open = show;
+      chevron.textContent = open ? "▾" : "▸";
+      contentEl.style.display = open ? "" : "none";
+      if (SKEY) localStorage.setItem(SKEY, open ? "1" : "0");
+    }
+
+    hdr.onclick = (e) => { if (e.target.tagName === "BUTTON") return; toggle(!open); };
+    toggle(open);
+
+    wrap.appendChild(hdr);
+    wrap.appendChild(contentEl);
+    return wrap;
+  }
+
+  const modelsContent = document.createElement("div");
+  modelsContent.style.cssText = "display:flex; flex-direction:column; gap:6px;";
 
   const refreshBtn = document.createElement("button");
   refreshBtn.textContent = "↺ Refresh";
   refreshBtn.style.cssText = btnStyle();
   refreshBtn.onclick = loadModels;
 
-  listHeader.appendChild(listTitle);
-  listHeader.appendChild(refreshBtn);
-  modelsSection.appendChild(listHeader);
-
   modelListEl = document.createElement("div");
-  modelListEl.style.cssText = "flex:1; overflow-y:auto; min-height:0;";
-  modelsSection.appendChild(modelListEl);
+  modelListEl.style.cssText = "max-height:250px; overflow-y:auto; min-height:0;";
+  modelsContent.appendChild(modelListEl);
 
-  modalSections.appendChild(modelsSection);
+  modalSections.appendChild(makeCollapsible("Models", modelsContent, { startOpen: true, storageKey: "models", extraHeaderEls: [refreshBtn] }));
 
   const addSection = document.createElement("div");
-  addSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0; border-top:1px solid #3a3a3a; padding-top:10px;";
-
-  const addTitle = document.createElement("div");
-  addTitle.style.cssText = "font-weight:600; font-size:13px;";
-  addTitle.textContent = "Add Model";
-  addSection.appendChild(addTitle);
+  addSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
 
   const urlInput = document.createElement("input");
   urlInput.type = "text";
@@ -800,25 +822,107 @@ function buildPanel() {
   };
   addSection.appendChild(downloadAllBtn);
 
-  modalSections.appendChild(addSection);
-  panel.appendChild(modalSections);
+  modalSections.appendChild(makeCollapsible("Add Model", addSection, { startOpen: false, storageKey: "download" }));
+
+  // --- Custom Nodes Section ---
+  const nodesSection = document.createElement("div");
+  nodesSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
+
+  const nodesCount = document.createElement("span");
+  nodesCount.style.cssText = "font-size:11px; color:#888; flex-shrink:0;";
+
+  const nodesScanBtn = document.createElement("button");
+  nodesScanBtn.textContent = "⟳ Scan";
+  nodesScanBtn.title = "Re-scan local custom nodes (does not deploy)";
+  nodesScanBtn.style.cssText = btnStyle();
+
+  const nodesRefreshBtn = document.createElement("button");
+  nodesRefreshBtn.textContent = "↺";
+  nodesRefreshBtn.title = "Refresh list";
+  nodesRefreshBtn.style.cssText = btnStyle();
+
+  const nodesListEl = document.createElement("div");
+  nodesListEl.style.cssText = "max-height:180px; overflow-y:auto; min-height:0;";
+  nodesSection.appendChild(nodesListEl);
+
+  const SOURCE_BADGE = {
+    cnr:     { label: "CNR", color: "#4a90e2", bg: "#1a2a3e" },
+    git:     { label: "GIT", color: "#f5a623", bg: "#2e2510" },
+    dirname: { label: "DIR", color: "#888",    bg: "#2a2a2a" },
+    always:  { label: "REQ", color: "#7ed321", bg: "#1a2e10" },
+  };
+
+  function renderNodesList(data) {
+    nodesListEl.innerHTML = "";
+    const nodes = data.nodes || [];
+    nodesCount.textContent = `${nodes.length} node${nodes.length !== 1 ? "s" : ""}`;
+    if (nodes.length === 0) {
+      nodesListEl.innerHTML = `<div style="color:#666;font-size:12px;padding:4px 0;">No custom nodes detected. Click Scan to detect.</div>`;
+      return;
+    }
+    for (const node of nodes) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
+      const name = document.createElement("span");
+      name.style.cssText = "flex:1; font-size:12px; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;";
+      name.textContent = node.name;
+      name.title = node.install_spec;
+      const badgeInfo = SOURCE_BADGE[node.source] || SOURCE_BADGE.dirname;
+      const badge = document.createElement("span");
+      badge.style.cssText = `font-size:9px; color:${badgeInfo.color}; background:${badgeInfo.bg}; border:1px solid ${badgeInfo.color}33; border-radius:3px; padding:1px 4px; flex-shrink:0; font-weight:600; letter-spacing:0.03em;`;
+      badge.textContent = badgeInfo.label;
+      row.appendChild(name);
+      if (node.version) {
+        const ver = document.createElement("span");
+        ver.style.cssText = "font-size:10px; color:#888; flex-shrink:0; font-family:monospace;";
+        ver.textContent = node.version;
+        row.appendChild(ver);
+      }
+      row.appendChild(badge);
+      nodesListEl.appendChild(row);
+    }
+  }
+
+  async function loadNodesList() {
+    nodesListEl.innerHTML = `<div style="color:#888;padding:4px 0;font-size:12px;">Loading...</div>`;
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/nodes/list`);
+      if (!resp.ok) throw new Error(resp.status);
+      const data = await resp.json();
+      renderNodesList(data);
+    } catch (e) {
+      nodesListEl.innerHTML = `<div style="color:#e05;font-size:12px;">Error: ${e.message}</div>`;
+    }
+  }
+
+  nodesRefreshBtn.onclick = loadNodesList;
+  nodesScanBtn.onclick = async () => {
+    nodesScanBtn.disabled = true;
+    nodesScanBtn.textContent = "⟳ Scanning...";
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/nodes/scan`, { method: "POST" });
+      const data = await resp.json();
+      if (data.status === "ok") { await loadNodesList(); }
+      else { throw new Error(data.message || "Scan failed"); }
+    } catch (e) {
+      nodesListEl.innerHTML = `<div style="color:#e05;font-size:12px;">Scan error: ${e.message}</div>`;
+    }
+    nodesScanBtn.disabled = false;
+    nodesScanBtn.textContent = "⟳ Scan";
+  };
+
+  modalSections.appendChild(makeCollapsible("Custom Nodes", nodesSection, { startOpen: false, storageKey: "nodes", extraHeaderEls: [nodesCount, nodesScanBtn, nodesRefreshBtn] }));
+  // --- End Custom Nodes Section ---
+
 
   const localNotice = document.createElement("div");
   localNotice.style.cssText = "font-size:12px; color:#888; line-height:1.5; flex-shrink:0; display:none;";
   localNotice.textContent = "Local mode: prompts go directly to ComfyUI. GPU routing is off.";
   panel.appendChild(localNotice);
 
-  const hfHr = document.createElement("div");
-  hfHr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
-  panel.appendChild(hfHr);
 
   const hfSection = document.createElement("div");
   hfSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
-
-  const hfTitle = document.createElement("div");
-  hfTitle.style.cssText = "font-weight:600; font-size:13px;";
-  hfTitle.textContent = "🤗 HuggingFace API Key";
-  hfSection.appendChild(hfTitle);
 
   const hfDesc = document.createElement("div");
   hfDesc.style.cssText = "font-size:11px; color:#888; line-height:1.5;";
@@ -845,7 +949,9 @@ function buildPanel() {
   hfStatus.style.cssText = "font-size:11px; color:#888; min-height:14px;";
   hfSection.appendChild(hfStatus);
 
-  panel.appendChild(hfSection);
+  modalSections.appendChild(makeCollapsible("🤗 HuggingFace API Key", hfSection, { startOpen: false, storageKey: "hf" }));
+
+  panel.appendChild(modalSections);
 
   (async () => {
     try {
@@ -904,6 +1010,7 @@ function buildPanel() {
 
   startDeployPoll();
   loadModels();
+  loadNodesList();
 
   return panel;
 }

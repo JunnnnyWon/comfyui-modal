@@ -8,7 +8,7 @@ import modal
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.0.4"
+COMFYAPP_VERSION = "1.1.0"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -16,9 +16,27 @@ COMFYUI_PORT = 8188
 COMFYUI_API_PORT = 8189
 MODELS_PATH = "/root/models"
 
-CUSTOM_NODES = [
-    "comfyui-manager",
-]
+
+def _load_custom_nodes():
+    """Load custom nodes list from generated JSON, fallback to manager-only."""
+    import os as _os
+    import json as _json
+    json_path = _os.path.join(_os.path.dirname(__file__), "custom_nodes.json")
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        specs = [n["install_spec"] for n in data.get("nodes", [])]
+        if specs:
+            print(f"[comfyapp] Loading {len(specs)} custom nodes from custom_nodes.json")
+            return specs
+    except FileNotFoundError:
+        print("[comfyapp] custom_nodes.json not found, using default (comfyui-manager only)")
+    except Exception as e:
+        print(f"[comfyapp] Error reading custom_nodes.json: {e}, using default")
+    return ["comfyui-manager"]
+
+
+CUSTOM_NODES = _load_custom_nodes()
 
 SUPPORTED_GPUS = ["a10g", "a100", "t4"]
 
@@ -345,6 +363,20 @@ class ComfyAPI:
         vol.commit()
         return {"status": "ok", "deleted": f"{safe_folder}/{safe_file}"}
 
+    @modal.method()
+    def list_installed_nodes(self):
+        """List custom nodes installed on the cloud instance."""
+        import os
+        nodes_dir = "/root/comfy/ComfyUI/custom_nodes"
+        if not os.path.isdir(nodes_dir):
+            return {"nodes": []}
+        nodes = sorted([
+            d for d in os.listdir(nodes_dir)
+            if os.path.isdir(os.path.join(nodes_dir, d))
+            and d != "__pycache__"
+        ])
+        return {"nodes": nodes}
+
 
 @app.cls(
     gpu="a100",
@@ -518,6 +550,20 @@ class ComfyAPI_A100:
         vol.commit()
         return {"status": "ok", "deleted": f"{safe_folder}/{safe_file}"}
 
+    @modal.method()
+    def list_installed_nodes(self):
+        """List custom nodes installed on the cloud instance."""
+        import os
+        nodes_dir = "/root/comfy/ComfyUI/custom_nodes"
+        if not os.path.isdir(nodes_dir):
+            return {"nodes": []}
+        nodes = sorted([
+            d for d in os.listdir(nodes_dir)
+            if os.path.isdir(os.path.join(nodes_dir, d))
+            and d != "__pycache__"
+        ])
+        return {"nodes": nodes}
+
 
 @app.cls(
     gpu="t4",
@@ -690,3 +736,17 @@ class ComfyAPI_T4:
         os.remove(target)
         vol.commit()
         return {"status": "ok", "deleted": f"{safe_folder}/{safe_file}"}
+
+    @modal.method()
+    def list_installed_nodes(self):
+        """List custom nodes installed on the cloud instance."""
+        import os
+        nodes_dir = "/root/comfy/ComfyUI/custom_nodes"
+        if not os.path.isdir(nodes_dir):
+            return {"nodes": []}
+        nodes = sorted([
+            d for d in os.listdir(nodes_dir)
+            if os.path.isdir(os.path.join(nodes_dir, d))
+            and d != "__pycache__"
+        ])
+        return {"nodes": nodes}
