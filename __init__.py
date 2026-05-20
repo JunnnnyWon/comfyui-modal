@@ -31,7 +31,10 @@ _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
 _CUSTOM_NODES_FILE = os.path.join(_NODE_DIR, ".custom_nodes.json")
 
+_pip_install_error = ""
+
 def _ensure_modal():
+    global _pip_install_error
     try:
         import modal  # noqa: F401
         return
@@ -47,9 +50,11 @@ def _ensure_modal():
         )
         print("[comfyui-modal] 'modal' installed successfully.")
     except subprocess.CalledProcessError as e:
+        _pip_install_error = e.stderr or str(e)
         print(f"[comfyui-modal] ERROR: Failed to install 'modal' package: {e.stderr}")
         print("[comfyui-modal] Please install manually: pip install modal")
     except Exception as e:
+        _pip_install_error = str(e)
         print(f"[comfyui-modal] ERROR: Unexpected error installing 'modal': {e}")
         print("[comfyui-modal] Please install manually: pip install modal")
 
@@ -141,6 +146,11 @@ def _run_deploy_background():
             _set_deployed_version(version)
             _deploy_status = {"state": "ready", "message": f"Deployed v{version}"}
             print(f"[comfyui-modal] Deploy succeeded (v{version})")
+            if _modal_available:
+                try:
+                    clear_cache()
+                except Exception:
+                    pass
         else:
             stderr = result.stderr.strip()
             if "token" in stderr.lower() or "auth" in stderr.lower() or "credentials" in stderr.lower():
@@ -183,13 +193,17 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status, clear_cache
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
-    print("[comfyui-modal] WARNING: 'modal' package not installed. Run: pip install modal")
+    _err_detail = f" (install error: {_pip_install_error})" if _pip_install_error else ""
+    print(f"[comfyui-modal] WARNING: 'modal' package not installed.{_err_detail} Run: pip install modal")
     _modal_available = False
-    _deploy_status = {"state": "error", "message": "modal package not installed. Run: pip install modal"}
+    _deploy_msg = "modal package not installed. Run: pip install modal"
+    if _pip_install_error:
+        _deploy_msg += f" (pip error: {_pip_install_error})"
+    _deploy_status = {"state": "error", "message": _deploy_msg}
     def run_prompt(*a, **kw): raise RuntimeError("modal not installed")
     def get_object_info(*a, **kw): raise RuntimeError("modal not installed")
     def health_check(*a, **kw): raise RuntimeError("modal not installed")
@@ -302,6 +316,8 @@ def _collect_input_images(workflow: dict) -> dict:
             continue
         filename = node.get("inputs", {}).get("image", "") or node.get("inputs", {}).get("mask", "")
         if not filename or filename in images:
+            continue
+        if filename.startswith("http://") or filename.startswith("https://"):
             continue
         for d in search_dirs:
             candidate = os.path.join(d, filename)

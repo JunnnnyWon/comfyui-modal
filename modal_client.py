@@ -30,6 +30,11 @@ def _api():
     return _api_instances[_current_gpu]
 
 
+def clear_cache():
+    """Clear cached API instance handles so subsequent requests use fresh handles."""
+    _api_instances.clear()
+
+
 def _modal_error_handler(func):
     """Decorator that catches common exceptions and re-raises with user-friendly messages."""
     @functools.wraps(func)
