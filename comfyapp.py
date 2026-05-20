@@ -74,10 +74,11 @@ if CUSTOM_NODE_URLS:
     for _url in CUSTOM_NODE_URLS:
         _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
         _install_commands.append(
-            f"comfy node install {_url} || "
+            f"echo 'Installing {_repo_name}...' && "
+            f"(comfy node install {_url} || "
             f"(git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
             f"cd /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
-            f"([ -f requirements.txt ] && pip install -r requirements.txt || true))"
+            f"([ -f requirements.txt ] && pip install -r requirements.txt || true))) || true"
         )
     image = image.run_commands(*_install_commands, gpu="a10g")
 
@@ -89,13 +90,25 @@ if CUSTOM_NODE_URLS:
     _entries_json = json.dumps(_node_entries)
     # Write a small Python script that checks which custom nodes were installed
     _script_content = (
-        "import json, os\n"
+        "import json, os, glob\n"
         f"entries = {_entries_json}\n"
         "results = []\n"
         "for e in entries:\n"
         "    path = '/root/comfy/ComfyUI/custom_nodes/' + e['name']\n"
         "    if os.path.isdir(path):\n"
-        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'ok', 'error': ''})\n"
+        "        error_msg = ''\n"
+        "        py_files = glob.glob(os.path.join(path, '*.py'))\n"
+        "        for pf in py_files:\n"
+        "            try:\n"
+        "                with open(pf, 'r') as f:\n"
+        "                    compile(f.read(), pf, 'exec')\n"
+        "            except SyntaxError as se:\n"
+        "                error_msg = f'Syntax error in {os.path.basename(pf)}: {se}'\n"
+        "                break\n"
+        "        if error_msg:\n"
+        "            results.append({'url': e['url'], 'name': e['name'], 'status': 'error', 'error': error_msg})\n"
+        "        else:\n"
+        "            results.append({'url': e['url'], 'name': e['name'], 'status': 'ok', 'error': ''})\n"
         "    else:\n"
         "        results.append({'url': e['url'], 'name': e['name'], 'status': 'error', 'error': 'Directory not found after install'})\n"
         "with open('/root/.custom_node_install_results.json', 'w') as f:\n"

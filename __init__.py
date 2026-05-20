@@ -31,6 +31,7 @@ _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
 _CUSTOM_NODES_FILE = os.path.join(_NODE_DIR, ".custom_nodes.json")
+_DEPLOY_LOG_FILE = os.path.join(_NODE_DIR, ".deploy_log")
 
 _pip_install_error = ""
 
@@ -117,6 +118,27 @@ def _find_modal_executable():
             return c
     return None
 
+def _parse_deploy_error(output):
+    """Try to extract specific failure info from deploy output."""
+    # Look for pip install failures
+    m = re.search(r"ERROR: Could not find a version that satisfies the requirement (\S+)", output)
+    if m:
+        return f"Failed package: {m.group(1)}."
+    m = re.search(r"ERROR: No matching distribution found for (\S+)", output)
+    if m:
+        return f"Failed package: {m.group(1)}."
+    if "conflicting dependencies" in output.lower():
+        m = re.search(r"(\S+) requires (\S+)", output)
+        if m:
+            return f"Conflicting dependencies: {m.group(1)} requires {m.group(2)}."
+        return "Conflicting dependencies detected."
+    # Look for failed node install
+    m = re.search(r"Installing (\S+).*?(?:error|failed|Error)", output, re.DOTALL | re.IGNORECASE)
+    if m:
+        return f"Failed node: {m.group(1)}."
+    return ""
+
+
 def _run_deploy_background():
     global _deploy_status
 
@@ -142,6 +164,15 @@ def _run_deploy_background():
             timeout=600,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
+        combined_output = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        # Always write full log
+        try:
+            with open(_DEPLOY_LOG_FILE, "w", encoding="utf-8") as f:
+                f.write(combined_output)
+        except Exception as e:
+            print(f"[comfyui-modal] Warning: could not write deploy log: {e}")
+
         if result.returncode == 0:
             version = _get_comfyapp_version()
             _set_deployed_version(version)
@@ -153,13 +184,21 @@ def _run_deploy_background():
                 except Exception as e:
                     print(f"[comfyui-modal] clear_cache failed: {e}")
         else:
-            stderr = result.stderr.strip()
-            if "token" in stderr.lower() or "auth" in stderr.lower() or "credentials" in stderr.lower():
+            combined = combined_output.strip()
+            if "token" in combined.lower() or "auth" in combined.lower() or "credentials" in combined.lower():
                 msg = "Modal token not set. Run: modal setup"
             else:
-                msg = f"Deploy failed: {stderr[:200]}"
-            _deploy_status = {"state": "error", "message": msg}
-            print(f"[comfyui-modal] {msg}")
+                error_prefix = _parse_deploy_error(combined)
+                truncated = combined[:2000]
+                msg = f"Deploy failed: {truncated}"
+                if error_prefix:
+                    msg = f"{error_prefix} {msg}"
+            _deploy_status = {
+                "state": "error",
+                "message": msg,
+                "details": combined[:2000],
+            }
+            print(f"[comfyui-modal] {msg[:500]}")
     except subprocess.TimeoutExpired:
         _deploy_status = {"state": "error", "message": "Deploy timed out (10 min)"}
         print(f"[comfyui-modal] Deploy timed out")
@@ -578,7 +617,20 @@ if _server:
 
     @_server.routes.get("/comfymodal/deploy/status")
     async def modal_deploy_status(request: web.Request) -> web.Response:
-        return web.json_response(_deploy_status)
+        resp = dict(_deploy_status)
+        resp.setdefault("has_log", os.path.isfile(_DEPLOY_LOG_FILE))
+        if resp.get("state") != "error":
+            resp.setdefault("details", "")
+        return web.json_response(resp)
+
+    @_server.routes.get("/comfymodal/deploy/log")
+    async def modal_deploy_log(request: web.Request) -> web.Response:
+        try:
+            with open(_DEPLOY_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                log = f.read()
+        except FileNotFoundError:
+            log = ""
+        return web.json_response({"log": log})
 
     @_server.routes.post("/comfymodal/deploy")
     async def modal_deploy_trigger(request: web.Request) -> web.Response:
