@@ -133,7 +133,7 @@ def _parse_deploy_error(output):
             return f"Conflicting dependencies: {m.group(1)} requires {m.group(2)}."
         return "Conflicting dependencies detected."
     # Look for failed node install
-    m = re.search(r"Installing (\S+).*?(?:error|failed|Error)", output, re.DOTALL | re.IGNORECASE)
+    m = re.search(r"Installing (\S+).{0,200}?(?:error|failed|Error)", output, re.IGNORECASE)
     if m:
         return f"Failed node: {m.group(1)}."
     return ""
@@ -200,10 +200,10 @@ def _run_deploy_background():
             }
             print(f"[comfyui-modal] {msg[:500]}")
     except subprocess.TimeoutExpired:
-        _deploy_status = {"state": "error", "message": "Deploy timed out (10 min)"}
+        _deploy_status = {"state": "error", "message": "Deploy timed out (10 min)", "details": "Deploy timed out after 10 minutes"}
         print(f"[comfyui-modal] Deploy timed out")
     except Exception as e:
-        _deploy_status = {"state": "error", "message": str(e)}
+        _deploy_status = {"state": "error", "message": str(e), "details": str(e)}
         print(f"[comfyui-modal] Deploy error: {e}")
 
 def _maybe_auto_deploy():
@@ -626,8 +626,16 @@ if _server:
     @_server.routes.get("/comfymodal/deploy/log")
     async def modal_deploy_log(request: web.Request) -> web.Response:
         try:
+            file_size = os.path.getsize(_DEPLOY_LOG_FILE)
+            max_bytes = 512000  # 500KB
             with open(_DEPLOY_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-                log = f.read()
+                if file_size > max_bytes:
+                    f.seek(file_size - max_bytes)
+                    # Discard partial first line after seek
+                    f.readline()
+                    log = "[...truncated, showing last 500KB...]\n" + f.read()
+                else:
+                    log = f.read()
         except FileNotFoundError:
             log = ""
         return web.json_response({"log": log})
