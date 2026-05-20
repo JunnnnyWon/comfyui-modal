@@ -609,6 +609,203 @@ function buildPanel() {
   const modalSections = document.createElement("div");
   modalSections.style.cssText = "display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden; min-height:0;";
 
+  // --- Custom Nodes Section ---
+  const customNodesSection = document.createElement("div");
+  customNodesSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
+
+  const cnHeader = document.createElement("div");
+  cnHeader.style.cssText = "display:flex; align-items:center; gap:6px; flex-shrink:0;";
+
+  const cnTitle = document.createElement("span");
+  cnTitle.style.cssText = "font-weight:600; font-size:13px; flex:1;";
+  cnTitle.textContent = "Custom Nodes";
+
+  const cnRefreshBtn = document.createElement("button");
+  cnRefreshBtn.textContent = "↺";
+  cnRefreshBtn.title = "Refresh custom nodes list";
+  cnRefreshBtn.style.cssText = btnStyle();
+  cnRefreshBtn.onclick = () => loadCustomNodes();
+
+  cnHeader.appendChild(cnTitle);
+  cnHeader.appendChild(cnRefreshBtn);
+  customNodesSection.appendChild(cnHeader);
+
+  const cnListEl = document.createElement("div");
+  cnListEl.style.cssText = "max-height:120px; overflow-y:auto;";
+  customNodesSection.appendChild(cnListEl);
+
+  const cnNotice = document.createElement("div");
+  cnNotice.style.cssText = "font-size:11px; color:#f5a623; display:none;";
+  cnNotice.textContent = "Click Deploy to apply changes.";
+  customNodesSection.appendChild(cnNotice);
+
+  const cnInputRow = document.createElement("div");
+  cnInputRow.style.cssText = "display:flex; gap:6px;";
+
+  const cnInput = document.createElement("input");
+  cnInput.type = "text";
+  cnInput.placeholder = "https://github.com/user/comfyui-node";
+  cnInput.style.cssText = inputStyle() + "flex:1;";
+
+  const cnAddBtn = document.createElement("button");
+  cnAddBtn.textContent = "Add";
+  cnAddBtn.style.cssText = btnStyle();
+
+  cnInputRow.appendChild(cnInput);
+  cnInputRow.appendChild(cnAddBtn);
+  customNodesSection.appendChild(cnInputRow);
+
+  let cnInstallStatus = {};
+  let cnStatusLoaded = false;
+
+  function renderCustomNodesList(nodes) {
+    cnListEl.innerHTML = "";
+    if (!nodes || nodes.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "font-size:11px; color:#666; padding:4px 0;";
+      empty.textContent = "No custom nodes configured.";
+      cnListEl.appendChild(empty);
+      return;
+    }
+    for (const url of nodes) {
+      const repoName = url.replace(/\/$/, "").split("/").pop().replace(/\.git$/, "");
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
+
+      const name = document.createElement("span");
+      name.style.cssText = "flex:1; font-size:12px; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;";
+      name.title = url;
+      name.textContent = repoName;
+
+      const statusInfo = cnInstallStatus[url];
+      if (statusInfo) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:10px; flex-shrink:0; padding:1px 4px; border-radius:3px;";
+        if (statusInfo.status === "ok") {
+          badge.style.color = "#7ed321";
+          badge.style.border = "1px solid #3a5";
+          badge.textContent = "\u2713";
+        } else {
+          badge.style.color = "#e05050";
+          badge.style.border = "1px solid #a33";
+          badge.textContent = "\u2717";
+          badge.title = statusInfo.error || "Install failed";
+        }
+        row.appendChild(name);
+        row.appendChild(badge);
+      } else if (cnStatusLoaded) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:10px; flex-shrink:0; padding:1px 4px; border-radius:3px; color:#888; border:1px solid #555;";
+        badge.textContent = "?";
+        badge.title = "Deploy to check status";
+        row.appendChild(name);
+        row.appendChild(badge);
+      } else {
+        row.appendChild(name);
+      }
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "\u2715";
+      removeBtn.title = "Remove " + repoName;
+      removeBtn.style.cssText = `
+        background: transparent; border: 1px solid #555; color: #e05;
+        width: 20px; height: 20px; border-radius: 3px; cursor: pointer;
+        font-size: 11px; flex-shrink: 0; line-height: 1;
+        display: flex; align-items: center; justify-content: center;
+      `;
+      removeBtn.onclick = async () => {
+        removeBtn.disabled = true;
+        removeBtn.textContent = "\u2026";
+        try {
+          const r = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+          });
+          const data = await r.json();
+          if (data.status === "ok") {
+            renderCustomNodesList(data.nodes);
+            cnNotice.style.display = "block";
+          }
+        } catch (e) {
+          removeBtn.disabled = false;
+          removeBtn.textContent = "\u2715";
+        }
+      };
+
+      row.appendChild(removeBtn);
+      cnListEl.appendChild(row);
+    }
+  }
+
+  async function loadCustomNodes() {
+    cnListEl.innerHTML = '<div style="color:#888;font-size:11px;">Loading...</div>';
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`);
+      const data = await resp.json();
+      renderCustomNodesList(data.nodes || []);
+    } catch (e) {
+      cnListEl.innerHTML = `<div style="color:#e05;font-size:11px;">Error: ${e.message}</div>`;
+    }
+    // Try to load install status
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes/status`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.status === "ok" && Array.isArray(data.nodes)) {
+          cnInstallStatus = {};
+          for (const n of data.nodes) {
+            cnInstallStatus[n.url] = n;
+          }
+          cnStatusLoaded = true;
+          // Re-render with status
+          const listResp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`);
+          const listData = await listResp.json();
+          renderCustomNodesList(listData.nodes || []);
+        }
+      }
+    } catch {}
+  }
+
+  cnAddBtn.onclick = async () => {
+    const url = cnInput.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) {
+      cnInput.style.borderColor = "#e05";
+      return;
+    }
+    cnInput.style.borderColor = "#444";
+    cnAddBtn.disabled = true;
+    try {
+      const r = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await r.json();
+      if (data.status === "ok") {
+        renderCustomNodesList(data.nodes);
+        cnInput.value = "";
+        cnNotice.style.display = "block";
+      } else {
+        cnInput.style.borderColor = "#e05";
+      }
+    } catch (e) {
+      cnInput.style.borderColor = "#e05";
+    }
+    cnAddBtn.disabled = false;
+  };
+
+  cnInput.addEventListener("keydown", (e) => { if (e.key === "Enter") cnAddBtn.click(); });
+
+  modalSections.appendChild(customNodesSection);
+
+  const cnHr = document.createElement("div");
+  cnHr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
+  modalSections.appendChild(cnHr);
+
+  // --- Models Section ---
+
   const modelsSection = document.createElement("div");
   modelsSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex:1; overflow:hidden; min-height:0;";
 
@@ -904,6 +1101,7 @@ function buildPanel() {
 
   startDeployPoll();
   loadModels();
+  loadCustomNodes();
 
   return panel;
 }
