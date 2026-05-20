@@ -218,7 +218,7 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, sync_custom_nodes, get_sync_status, upload_model_to_volume, clear_cache
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, sync_custom_nodes, get_sync_status, upload_model_to_volume, upload_model_chunk, clear_cache
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
@@ -239,6 +239,7 @@ except ImportError:
     def sync_custom_nodes(*a, **kw): raise RuntimeError("modal not installed")
     def get_sync_status(*a, **kw): raise RuntimeError("modal not installed")
     def upload_model_to_volume(*a, **kw): raise RuntimeError("modal not installed")
+    def upload_model_chunk(*a, **kw): raise RuntimeError("modal not installed")
     def set_gpu(gpu): pass
     def get_gpu(): return "a10g"
 
@@ -707,6 +708,8 @@ if _server:
     @_server.routes.post("/comfymodal/sync/models")
     async def modal_sync_models(request: web.Request) -> web.Response:
         """Upload local models that are not yet on the remote volume."""
+        CHUNK_SIZE = 100 * 1024 * 1024  # 100MB chunks
+
         try:
             remote = await get_sync_status()
         except Exception as e:
@@ -740,9 +743,22 @@ if _server:
         errors = []
         for item in to_upload:
             try:
+                file_size = item["size"]
+                offset = 0
                 with open(item["path"], "rb") as f:
-                    file_data = f.read()
-                await upload_model_to_volume(file_data=file_data, folder=item["folder"], filename=item["name"])
+                    while True:
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        is_last = (offset + len(chunk)) >= file_size
+                        await upload_model_chunk(
+                            chunk_data=chunk,
+                            folder=item["folder"],
+                            filename=item["name"],
+                            offset=offset,
+                            is_last=is_last,
+                        )
+                        offset += len(chunk)
                 uploaded += 1
             except Exception as e:
                 errors.append({"name": f"{item['folder']}/{item['name']}", "error": str(e)})
