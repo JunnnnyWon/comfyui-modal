@@ -656,6 +656,7 @@ function buildPanel() {
   customNodesSection.appendChild(cnInputRow);
 
   let cnInstallStatus = {};
+  let cnStatusLoaded = false;
 
   function renderCustomNodesList(nodes) {
     cnListEl.innerHTML = "";
@@ -690,6 +691,13 @@ function buildPanel() {
           badge.textContent = "\u2717";
           badge.title = statusInfo.error || "Install failed";
         }
+        row.appendChild(name);
+        row.appendChild(badge);
+      } else if (cnStatusLoaded) {
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:10px; flex-shrink:0; padding:1px 4px; border-radius:3px; color:#888; border:1px solid #555;";
+        badge.textContent = "?";
+        badge.title = "Deploy to check status";
         row.appendChild(name);
         row.appendChild(badge);
       } else {
@@ -749,6 +757,7 @@ function buildPanel() {
           for (const n of data.nodes) {
             cnInstallStatus[n.url] = n;
           }
+          cnStatusLoaded = true;
           // Re-render with status
           const listResp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`);
           const listData = await listResp.json();

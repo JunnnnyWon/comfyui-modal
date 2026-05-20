@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import uuid
+import re
 import modal
 
 # Bump this version whenever comfyapp.py changes.
@@ -37,6 +38,13 @@ def _load_custom_node_urls():
 
 
 CUSTOM_NODE_URLS = _load_custom_node_urls()
+
+# Validate URLs to prevent shell injection - only allow safe characters
+_SAFE_URL_RE = re.compile(r'^https?://[a-zA-Z0-9._\-/~@:]+$')
+CUSTOM_NODE_URLS = [
+    u for u in CUSTOM_NODE_URLS
+    if _SAFE_URL_RE.match(u) or not print(f"[comfyui-modal] WARNING: skipping unsafe custom node URL: {u}")
+]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -73,25 +81,31 @@ if CUSTOM_NODE_URLS:
         )
     image = image.run_commands(*_install_commands, gpu="a10g")
 
-    # Write install results for each custom node URL
-    _results_script = "import json, os, subprocess\\n"
-    _results_script += "results = []\\n"
+    # Write install results for each custom node URL by checking which directories exist
+    _node_entries = []
     for _url in CUSTOM_NODE_URLS:
         _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
-        _results_script += (
-            f"path = '/root/comfy/ComfyUI/custom_nodes/{_repo_name}'\\n"
-            f"if os.path.isdir(path):\\n"
-            f"    results.append({{'url': '{_url}', 'name': '{_repo_name}', 'status': 'ok', 'error': ''}})\\n"
-            f"else:\\n"
-            f"    results.append({{'url': '{_url}', 'name': '{_repo_name}', 'status': 'error', 'error': 'Directory not found after install'}})\\n"
-        )
-    _results_script += "with open('/root/.custom_node_install_results.json', 'w') as f:\\n"
-    _results_script += "    json.dump(results, f)\\n"
-    _results_script += "print(json.dumps(results, indent=2))\\n"
-    image = image.run_commands(
-        f"python3 -c \"{_results_script}\"",
-        gpu="a10g",
+        _node_entries.append({"url": _url, "name": _repo_name})
+    _entries_json = json.dumps(_node_entries)
+    # Write a small Python script that checks which custom nodes were installed
+    _script_content = (
+        "import json, os\n"
+        f"entries = {_entries_json}\n"
+        "results = []\n"
+        "for e in entries:\n"
+        "    path = '/root/comfy/ComfyUI/custom_nodes/' + e['name']\n"
+        "    if os.path.isdir(path):\n"
+        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'ok', 'error': ''})\n"
+        "    else:\n"
+        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'error', 'error': 'Directory not found after install'})\n"
+        "with open('/root/.custom_node_install_results.json', 'w') as f:\n"
+        "    json.dump(results, f)\n"
+        "print(json.dumps(results, indent=2))\n"
     )
+    # Use a heredoc-style approach: write script to file then execute
+    _escaped_content = _script_content.replace("'", "'\\''")
+    _write_and_run = f"printf '%s' '{_escaped_content}' > /tmp/_check_cn.py && python3 /tmp/_check_cn.py"
+    image = image.run_commands(_write_and_run, gpu="a10g")
 
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
