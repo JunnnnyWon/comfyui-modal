@@ -133,18 +133,47 @@ def sync_custom_nodes_to_volume(archive_data: bytes) -> dict:
     import os
     import shutil
 
-    # Clear existing custom nodes in volume
+    staging_dir = os.path.join(CUSTOM_NODES_PATH, ".staging")
+
+    # Clean any leftover staging dir
+    if os.path.exists(staging_dir):
+        shutil.rmtree(staging_dir)
+    os.makedirs(staging_dir)
+
+    # Extract to staging with path traversal protection
+    buf = io.BytesIO(archive_data)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        for member in tar.getmembers():
+            # Reject absolute paths and parent references
+            if member.name.startswith("/") or ".." in member.name.split("/"):
+                raise ValueError(f"Tar member '{member.name}' contains unsafe path")
+            # Verify resolved path stays within staging directory
+            member_path = os.path.normpath(os.path.join(staging_dir, member.name))
+            if not member_path.startswith(os.path.normpath(staging_dir)):
+                raise ValueError(f"Tar member '{member.name}' would extract outside target directory")
+        # Reset buffer and extract after validation
+        buf.seek(0)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar2:
+            tar2.extractall(path=staging_dir)
+
+    # Swap: remove old content, move staging content into place
     for item in os.listdir(CUSTOM_NODES_PATH):
+        if item == ".staging":
+            continue
         item_path = os.path.join(CUSTOM_NODES_PATH, item)
         if os.path.isdir(item_path):
             shutil.rmtree(item_path)
         else:
             os.remove(item_path)
 
-    # Extract archive
-    buf = io.BytesIO(archive_data)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
-        tar.extractall(path=CUSTOM_NODES_PATH)
+    # Move extracted items from staging to volume root
+    for item in os.listdir(staging_dir):
+        src = os.path.join(staging_dir, item)
+        dst = os.path.join(CUSTOM_NODES_PATH, item)
+        shutil.move(src, dst)
+
+    # Clean up staging
+    shutil.rmtree(staging_dir)
 
     custom_nodes_vol.commit()
 
@@ -209,6 +238,32 @@ def upload_model_to_volume(file_data: bytes, folder: str, filename: str) -> dict
 
     vol.commit()
     return {"status": "ok", "path": str(dest), "size": len(file_data)}
+
+
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11"),
+    cpu=2,
+    memory=4096,
+    timeout=3600,
+    volumes={MODELS_PATH: vol},
+)
+def upload_model_chunk(chunk_data: bytes, folder: str, filename: str, offset: int, is_last: bool) -> dict:
+    """Upload a model file chunk to the volume. Chunks are appended sequentially."""
+    import os
+    from pathlib import Path
+
+    dest = Path(MODELS_PATH) / folder / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    mode = "ab" if offset > 0 else "wb"
+    with open(dest, mode) as f:
+        f.write(chunk_data)
+
+    if is_last:
+        vol.commit()
+        return {"status": "ok", "path": str(dest), "size": os.path.getsize(dest)}
+
+    return {"status": "partial", "offset": offset + len(chunk_data)}
 
 
 class _ComfyAPIMixin:
