@@ -3,48 +3,22 @@ import sys
 import time
 import json
 import uuid
-import re
 import modal
 
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "1.1.0"
+COMFYAPP_VERSION = "2.0.0"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
+CUSTOM_NODES_VOLUME_NAME = "comfyui-custom-nodes"
 COMFYUI_PORT = 8188
 COMFYUI_API_PORT = 8189
 MODELS_PATH = "/root/models"
-
-CUSTOM_NODES = [
-    "comfyui-manager",
-]
+CUSTOM_NODES_PATH = "/root/custom_nodes_vol"
 
 SUPPORTED_GPUS = ["a10g", "a100", "t4"]
-
-import os as _os
-
-_CUSTOM_NODES_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".custom_nodes.json")
-
-
-def _load_custom_node_urls():
-    try:
-        with open(_CUSTOM_NODES_FILE, "r") as f:
-            import json as _json
-            return _json.load(f)
-    except (FileNotFoundError, Exception):
-        return []
-
-
-CUSTOM_NODE_URLS = _load_custom_node_urls()
-
-# Validate URLs to prevent shell injection - only allow safe characters
-_SAFE_URL_RE = re.compile(r'^https?://[a-zA-Z0-9._\-/~@:]+$')
-CUSTOM_NODE_URLS = [
-    u for u in CUSTOM_NODE_URLS
-    if _SAFE_URL_RE.match(u) or not print(f"[comfyui-modal] WARNING: skipping unsafe custom node URL: {u}")
-]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -62,57 +36,7 @@ image = (
         "comfy --skip-prompt install --nvidia",
         gpu="a10g",
     )
-    .run_commands(
-        *[f"comfy node install {node}" for node in CUSTOM_NODES],
-        gpu="a10g",
-    )
-    .run_commands("rm -rf /root/comfy/ComfyUI/models && ln -s /root/models /root/comfy/ComfyUI/models")
 )
-
-if CUSTOM_NODE_URLS:
-    _install_commands = []
-    for _url in CUSTOM_NODE_URLS:
-        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
-        _install_commands.append(
-            f"(echo '=== Installing {_repo_name} ===' && "
-            f"git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
-            f"cd /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
-            f"([ -f requirements.txt ] && "
-            f"pip install -r requirements.txt --no-deps 2>/dev/null; "
-            f"pip install -r requirements.txt --ignore-installed 2>&1 | "
-            f"grep -v 'already satisfied' || true) && "
-            f"([ -f install.py ] && python install.py || true) && "
-            f"echo '=== {_repo_name} done ===') || "
-            f"echo '=== {_repo_name} FAILED ==='"
-        )
-    image = image.run_commands(*_install_commands, gpu="a10g")
-
-    # Write install results for each custom node URL by checking which directories exist
-    _node_entries = []
-    for _url in CUSTOM_NODE_URLS:
-        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
-        _node_entries.append({"url": _url, "name": _repo_name})
-    _entries_json = json.dumps(_node_entries)
-
-    # Build verification script and encode as base64 to avoid shell/Dockerfile parsing issues
-    import base64 as _b64
-    _script_content = (
-        "import json, os\n"
-        f"entries = {_entries_json}\n"
-        "results = []\n"
-        "for e in entries:\n"
-        "    path = '/root/comfy/ComfyUI/custom_nodes/' + e['name']\n"
-        "    if os.path.isdir(path):\n"
-        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'ok', 'error': ''})\n"
-        "    else:\n"
-        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'error', 'error': 'Directory not found after install'})\n"
-        "with open('/root/.custom_node_install_results.json', 'w') as f:\n"
-        "    json.dump(results, f)\n"
-        "print(json.dumps(results, indent=2))\n"
-    )
-    _b64_script = _b64.b64encode(_script_content.encode()).decode()
-    _write_and_run = f"echo '{_b64_script}' | base64 -d > /tmp/_check_cn.py && python3 /tmp/_check_cn.py"
-    image = image.run_commands(_write_and_run, gpu="a10g")
 
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -121,6 +45,7 @@ download_image = (
 
 app = modal.App(APP_NAME, image=image)
 vol = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+custom_nodes_vol = modal.Volume.from_name(CUSTOM_NODES_VOLUME_NAME, create_if_missing=True)
 
 
 @app.function(
@@ -130,7 +55,7 @@ vol = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
     timeout=3600,
     min_containers=0,
     scaledown_window=2,
-    volumes={MODELS_PATH: vol},
+    volumes={MODELS_PATH: vol, CUSTOM_NODES_PATH: custom_nodes_vol},
 )
 @modal.web_server(COMFYUI_PORT, startup_timeout=300)
 def ui():
@@ -194,11 +119,186 @@ def batch_download_models(items: list, hf_token: str = "") -> list:
     return results
 
 
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11"),
+    cpu=2,
+    memory=4096,
+    timeout=1800,
+    volumes={CUSTOM_NODES_PATH: custom_nodes_vol},
+)
+def sync_custom_nodes_to_volume(archive_data: bytes) -> dict:
+    """Receive a tar.gz archive of custom nodes and extract to volume."""
+    import tarfile
+    import io
+    import os
+    import shutil
+
+    staging_dir = os.path.join(CUSTOM_NODES_PATH, ".staging")
+
+    # Clean any leftover staging dir
+    if os.path.exists(staging_dir):
+        shutil.rmtree(staging_dir)
+    os.makedirs(staging_dir)
+
+    # Extract to staging with path traversal protection
+    buf = io.BytesIO(archive_data)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        for member in tar.getmembers():
+            # Reject absolute paths and parent references
+            if member.name.startswith("/") or ".." in member.name.split("/"):
+                raise ValueError(f"Tar member '{member.name}' contains unsafe path")
+            # Verify resolved path stays within staging directory
+            member_path = os.path.normpath(os.path.join(staging_dir, member.name))
+            if not member_path.startswith(os.path.normpath(staging_dir)):
+                raise ValueError(f"Tar member '{member.name}' would extract outside target directory")
+        # Reset buffer and extract after validation
+        buf.seek(0)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar2:
+            tar2.extractall(path=staging_dir)
+
+    # Swap: remove old content, move staging content into place
+    for item in os.listdir(CUSTOM_NODES_PATH):
+        if item == ".staging":
+            continue
+        item_path = os.path.join(CUSTOM_NODES_PATH, item)
+        if os.path.isdir(item_path):
+            shutil.rmtree(item_path)
+        else:
+            os.remove(item_path)
+
+    # Move extracted items from staging to volume root
+    for item in os.listdir(staging_dir):
+        src = os.path.join(staging_dir, item)
+        dst = os.path.join(CUSTOM_NODES_PATH, item)
+        shutil.move(src, dst)
+
+    # Clean up staging
+    shutil.rmtree(staging_dir)
+
+    custom_nodes_vol.commit()
+
+    # List what was extracted
+    nodes = [d for d in os.listdir(CUSTOM_NODES_PATH) if os.path.isdir(os.path.join(CUSTOM_NODES_PATH, d))]
+    return {"status": "ok", "nodes": nodes}
+
+
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11"),
+    cpu=1,
+    memory=512,
+    timeout=60,
+    volumes={MODELS_PATH: vol, CUSTOM_NODES_PATH: custom_nodes_vol},
+)
+def get_volume_status() -> dict:
+    """Return current state of both volumes."""
+    import os
+
+    vol.reload()
+    custom_nodes_vol.reload()
+
+    # Scan models
+    models = []
+    if os.path.isdir(MODELS_PATH):
+        for folder in os.listdir(MODELS_PATH):
+            folder_path = os.path.join(MODELS_PATH, folder)
+            if not os.path.isdir(folder_path):
+                continue
+            for fname in os.listdir(folder_path):
+                fpath = os.path.join(folder_path, fname)
+                if os.path.isfile(fpath):
+                    models.append({"folder": folder, "name": fname, "size": os.path.getsize(fpath)})
+
+    # Scan custom nodes
+    custom_nodes = []
+    if os.path.isdir(CUSTOM_NODES_PATH):
+        for d in os.listdir(CUSTOM_NODES_PATH):
+            if os.path.isdir(os.path.join(CUSTOM_NODES_PATH, d)):
+                custom_nodes.append(d)
+
+    return {"models": models, "custom_nodes": custom_nodes}
+
+
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11"),
+    cpu=2,
+    memory=4096,
+    timeout=1800,
+    volumes={MODELS_PATH: vol},
+)
+def upload_model_to_volume(file_data: bytes, folder: str, filename: str) -> dict:
+    """Upload a model file directly to the volume."""
+    import os
+    from pathlib import Path
+
+    dest = Path(MODELS_PATH) / folder / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(dest, "wb") as f:
+        f.write(file_data)
+
+    vol.commit()
+    return {"status": "ok", "path": str(dest), "size": len(file_data)}
+
+
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11"),
+    cpu=2,
+    memory=4096,
+    timeout=3600,
+    volumes={MODELS_PATH: vol},
+)
+def upload_model_chunk(chunk_data: bytes, folder: str, filename: str, offset: int, is_last: bool) -> dict:
+    """Upload a model file chunk to the volume. Chunks are appended sequentially."""
+    import os
+    from pathlib import Path
+
+    dest = Path(MODELS_PATH) / folder / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    mode = "ab" if offset > 0 else "wb"
+    with open(dest, mode) as f:
+        f.write(chunk_data)
+
+    if is_last:
+        vol.commit()
+        return {"status": "ok", "path": str(dest), "size": os.path.getsize(dest)}
+
+    return {"status": "partial", "offset": offset + len(chunk_data)}
+
+
 class _ComfyAPIMixin:
     """Shared implementation for all GPU-specific ComfyAPI classes."""
 
     @modal.enter(snap=True)
     def startup(self):
+        import os
+        import shutil
+
+        # Symlink models from volume into ComfyUI
+        comfy_models = "/root/comfy/ComfyUI/models"
+        if os.path.isdir(comfy_models):
+            shutil.rmtree(comfy_models)
+        os.symlink(MODELS_PATH, comfy_models)
+
+        # Sync custom nodes from volume into ComfyUI
+        vol.reload()
+        custom_nodes_vol.reload()
+        comfy_custom_nodes = "/root/comfy/ComfyUI/custom_nodes"
+        vol_cn_path = CUSTOM_NODES_PATH
+        if os.path.isdir(vol_cn_path):
+            for node_dir in os.listdir(vol_cn_path):
+                src = os.path.join(vol_cn_path, node_dir)
+                dst = os.path.join(comfy_custom_nodes, node_dir)
+                if os.path.isdir(src) and not os.path.exists(dst):
+                    os.symlink(src, dst)
+                    # Install requirements if present
+                    req_file = os.path.join(src, "requirements.txt")
+                    if os.path.isfile(req_file):
+                        subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "-r", req_file],
+                            capture_output=True, timeout=300
+                        )
+
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
              f"--port={COMFYUI_API_PORT}", "--disable-auto-launch"],
@@ -237,6 +337,7 @@ class _ComfyAPIMixin:
     @modal.method()
     def run_prompt(self, workflow: dict, input_images: dict = None) -> dict:
         import urllib.request
+        import urllib.error
         import base64
         from pathlib import Path
 
@@ -257,8 +358,33 @@ class _ComfyAPIMixin:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req) as r:
-            queued = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(req) as r:
+                queued = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # Read the response body for validation error details
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")
+                error_data = json.loads(error_body)
+                # Extract meaningful error info from ComfyUI's response
+                node_errors = error_data.get("node_errors", {})
+                if node_errors:
+                    msgs = []
+                    for node_id, err_info in node_errors.items():
+                        class_type = err_info.get("class_type", f"Node {node_id}")
+                        for err in err_info.get("errors", []):
+                            msgs.append(f"{class_type}: {err.get('message', 'unknown error')}")
+                    if msgs:
+                        raise RuntimeError(f"Workflow validation failed: {'; '.join(msgs)}") from e
+                # Fallback: use the message field
+                msg = error_data.get("message", "") or error_data.get("error", "")
+                if msg:
+                    raise RuntimeError(f"Workflow validation failed: {msg}") from e
+            except (json.JSONDecodeError, RuntimeError):
+                if isinstance(sys.exc_info()[1], RuntimeError):
+                    raise
+            raise RuntimeError(f"ComfyUI rejected the prompt (HTTP {e.code}): {error_body[:500]}") from e
 
         prompt_id = queued["prompt_id"]
         return self._poll_until_done(prompt_id, client_id)
@@ -319,15 +445,6 @@ class _ComfyAPIMixin:
         return {"status": "ok"}
 
     @modal.method()
-    def custom_node_status(self):
-        import os
-        results_file = "/root/.custom_node_install_results.json"
-        if os.path.isfile(results_file):
-            with open(results_file, "r") as f:
-                return json.loads(f.read())
-        return []
-
-    @modal.method()
     def list_models(self):
         import os
 
@@ -383,7 +500,7 @@ class _ComfyAPIMixin:
     min_containers=0,
     # Keep containers warm for 60s to avoid cold-start costs during iterative workflows
     scaledown_window=60,
-    volumes={MODELS_PATH: vol},
+    volumes={MODELS_PATH: vol, CUSTOM_NODES_PATH: custom_nodes_vol},
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
@@ -400,7 +517,7 @@ class ComfyAPI(_ComfyAPIMixin):
     min_containers=0,
     # Keep containers warm for 60s to avoid cold-start costs during iterative workflows
     scaledown_window=60,
-    volumes={MODELS_PATH: vol},
+    volumes={MODELS_PATH: vol, CUSTOM_NODES_PATH: custom_nodes_vol},
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
@@ -417,7 +534,7 @@ class ComfyAPI_A100(_ComfyAPIMixin):
     min_containers=0,
     # Keep containers warm for 60s to avoid cold-start costs during iterative workflows
     scaledown_window=60,
-    volumes={MODELS_PATH: vol},
+    volumes={MODELS_PATH: vol, CUSTOM_NODES_PATH: custom_nodes_vol},
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
