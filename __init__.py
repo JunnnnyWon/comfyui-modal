@@ -3,6 +3,7 @@ import json
 import uuid
 import sys
 import os
+import re
 import base64
 import copy
 import threading
@@ -596,6 +597,12 @@ if _server:
             return web.json_response({"status": "error", "message": "url required"}, status=400)
         if not url.startswith("http://") and not url.startswith("https://"):
             return web.json_response({"status": "error", "message": "url must start with http:// or https://"}, status=400)
+        if not re.match(r'^https?://[a-zA-Z0-9._\-/~@:]+$', url):
+            return web.json_response({"status": "error", "message": "url contains invalid characters"}, status=400)
+        # Normalize: strip trailing slash and .git suffix
+        url = url.rstrip('/')
+        if url.endswith('.git'):
+            url = url[:-4]
         nodes = _read_custom_nodes()
         if url not in nodes:
             nodes.append(url)
