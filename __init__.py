@@ -9,6 +9,7 @@ import copy
 import threading
 import subprocess
 import time
+import glob
 
 from aiohttp import web
 
@@ -244,6 +245,63 @@ def _write_modal_toml(token_id: str, token_secret: str):
     os.makedirs(os.path.dirname(_MODAL_TOML_PATH), exist_ok=True)
     with open(_MODAL_TOML_PATH, "w") as f:
         f.write(content)
+
+
+def _sync_model_placeholders(modal_models: dict):
+    """Sync local modal- placeholder files with the models available on Modal."""
+    models_root = os.path.join(_COMFYUI_ROOT, "models")
+
+    # Build set of expected placeholders per folder
+    expected_by_folder = {}
+    for key, items in modal_models.items():
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            folder = item.get("folder", key)
+            if not name or not folder:
+                continue
+            folder = os.path.basename(folder)
+            name = os.path.basename(name)
+            placeholder_name = f"modal-{name}"
+            expected_by_folder.setdefault(folder, set()).add(placeholder_name)
+
+    # Create missing placeholders
+    for folder, expected_files in expected_by_folder.items():
+        local_dir = os.path.join(models_root, folder)
+        try:
+            os.makedirs(local_dir, exist_ok=True)
+        except Exception as e:
+            print(f"[comfyui-modal] Warning: could not create directory {local_dir}: {e}")
+            continue
+        for placeholder_name in expected_files:
+            dest = os.path.join(local_dir, placeholder_name)
+            try:
+                if not os.path.exists(dest):
+                    open(dest, "wb").close()
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: could not create placeholder {dest}: {e}")
+
+    # Remove stale placeholders
+    all_expected = set()
+    for folder, expected_files in expected_by_folder.items():
+        for f in expected_files:
+            all_expected.add(os.path.join(models_root, folder, f))
+
+    try:
+        existing_placeholders = glob.glob(os.path.join(models_root, "*", "modal-*"))
+    except Exception as e:
+        print(f"[comfyui-modal] Warning: could not scan for stale placeholders: {e}")
+        return
+
+    for existing_path in existing_placeholders:
+        if existing_path not in all_expected:
+            try:
+                os.remove(existing_path)
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: could not remove stale placeholder {existing_path}: {e}")
 
 
 _queue: asyncio.Queue = asyncio.Queue()
@@ -596,6 +654,10 @@ if _server:
     async def modal_list_models(request: web.Request) -> web.Response:
         try:
             result = await list_models()
+            try:
+                _sync_model_placeholders(result)
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: placeholder sync failed: {e}")
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=503)
