@@ -57,6 +57,7 @@ let statusBannerTextEl = null;
 let _deployPollTimer = null;
 let _deployState = "idle";
 let _hasChanges = false;
+let _deployWarning = "";
 
 const STATUS_STYLE = {
   [STATUS.UNKNOWN]:    { color: "#888",    label: "Unknown" },
@@ -85,6 +86,10 @@ function updateStatusBanner() {
     color = "#e05050";
   } else if (_hasChanges) {
     text = "Deploy needed";
+    bg = "#3d2e00";
+    color = "#f5a623";
+  } else if (_deployState === "ready" && _deployWarning) {
+    text = _deployWarning;
     bg = "#3d2e00";
     color = "#f5a623";
   } else if (currentStatus === STATUS.ONLINE) {
@@ -236,6 +241,7 @@ async function pollDeployStatus() {
       _deployPollTimer = setTimeout(pollDeployStatus, 3000);
     } else if (data.state === "ready") {
       _hasChanges = false;
+      _deployWarning = data.warning ? data.message : "";
       updateStatusBanner();
     }
   } catch {}
