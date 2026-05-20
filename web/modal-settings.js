@@ -460,7 +460,6 @@ function renderModelList(data) {
     section.appendChild(folderLabel);
 
     for (const file of files) {
-      const alreadyInjected = file.name.startsWith("modal-");
       const row = document.createElement("div");
       row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
 
@@ -483,50 +482,6 @@ function renderModelList(data) {
       } else {
         row.appendChild(name);
         row.appendChild(size);
-      }
-
-      // Inject button - "Create local reference"
-      const injectBtn = document.createElement("button");
-      injectBtn.title = alreadyInjected
-        ? "Already referenced locally"
-        : "Create local reference - lets ComfyUI see this cloud model in node dropdowns";
-      injectBtn.textContent = alreadyInjected ? "Referenced" : "\u2B07";
-      injectBtn.style.cssText = `
-        background: transparent; border: 1px solid ${alreadyInjected ? "#3a5" : "#557"}; color: ${alreadyInjected ? "#3a3" : "#99b"};
-        padding: 0 6px; height: 20px; border-radius: 3px; cursor: ${alreadyInjected ? "default" : "pointer"};
-        font-size: ${alreadyInjected ? "10px" : "12px"}; flex-shrink: 0; line-height: 1;
-      `;
-      if (!alreadyInjected) {
-        injectBtn.onclick = async () => {
-          injectBtn.disabled = true;
-          injectBtn.textContent = "\u2026";
-          try {
-            const r = await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ folder: file.folder ?? folder, filename: file.name }),
-            });
-            const result = await r.json();
-            if (result.status === "ok") {
-              injectBtn.textContent = "Referenced";
-              injectBtn.style.color = "#3a3";
-              injectBtn.style.borderColor = "#3a5";
-              injectBtn.style.fontSize = "10px";
-              injectBtn.title = `Referenced as ${result.name}`;
-            } else {
-              throw new Error(result.message);
-            }
-          } catch (e) {
-            injectBtn.textContent = "!";
-            injectBtn.style.color = "#e05";
-            injectBtn.title = `Error: ${e.message}`;
-            setTimeout(() => {
-              injectBtn.disabled = false;
-              injectBtn.textContent = "\u2B07";
-              injectBtn.style.color = "#99b";
-            }, 2000);
-          }
-        };
       }
 
       const delBtn = document.createElement("button");
@@ -560,7 +515,6 @@ function renderModelList(data) {
         }
       };
 
-      row.appendChild(injectBtn);
       row.appendChild(delBtn);
       section.appendChild(row);
     }
@@ -957,217 +911,149 @@ function buildPanel() {
 
   scrollContent.appendChild(gpuSection);
 
-  // === CUSTOM NODES SECTION (Collapsible) ===
-  const cnCollapsible = createCollapsibleSection("Custom Nodes", { defaultOpen: false, badge: "0" });
-  const cnContent = cnCollapsible.content;
+  // === SYNC SECTION (Collapsible) ===
+  const syncCollapsible = createCollapsibleSection("Sync", { defaultOpen: true, badge: "..." });
+  const syncContent = syncCollapsible.content;
 
-  const cnHelp = document.createElement("div");
-  cnHelp.style.cssText = "font-size: 11px; color: #888; line-height: 1.5; margin-bottom: 8px;";
-  cnHelp.textContent = "Add ComfyUI custom node repositories. These are installed in the cloud environment during deploy.";
-  cnContent.appendChild(cnHelp);
+  const syncHelp = document.createElement("div");
+  syncHelp.style.cssText = "font-size: 11px; color: #888; line-height: 1.5; margin-bottom: 8px;";
+  syncHelp.textContent = "Sync your local models and custom nodes to the Modal cloud.";
+  syncContent.appendChild(syncHelp);
 
-  const cnListEl = document.createElement("div");
-  cnListEl.style.cssText = "max-height:150px; overflow-y:auto;";
-  cnContent.appendChild(cnListEl);
+  // Status display
+  const syncStatusEl = document.createElement("div");
+  syncStatusEl.style.cssText = "font-size: 12px; color: #aaa; line-height: 1.6; margin-bottom: 10px; padding: 8px; background: #2a2a2a; border-radius: 4px;";
+  syncStatusEl.textContent = "Loading sync status...";
+  syncContent.appendChild(syncStatusEl);
 
-  const cnNotice = document.createElement("div");
-  cnNotice.style.cssText = `
-    font-size: 11px; color: #f5a623; background: #3d2e00; border-radius: 4px;
-    padding: 6px 10px; margin-top: 6px; display: none;
-    display: none; align-items: center; gap: 8px;
-  `;
-  const cnNoticeText = document.createElement("span");
-  cnNoticeText.style.cssText = "flex: 1;";
-  cnNoticeText.textContent = "Deploy required - new custom nodes will be installed on next deploy";
-  const cnNoticeDeployBtn = document.createElement("button");
-  cnNoticeDeployBtn.textContent = "Deploy Now";
-  cnNoticeDeployBtn.style.cssText = "background:#f5a623; border:none; color:#111; padding:3px 8px; border-radius:3px; cursor:pointer; font-size:11px; font-weight:600; flex-shrink:0;";
-  cnNoticeDeployBtn.onclick = () => redeployBtn.click();
-  cnNotice.appendChild(cnNoticeText);
-  cnNotice.appendChild(cnNoticeDeployBtn);
-  cnContent.appendChild(cnNotice);
+  // Refresh status button
+  const syncRefreshBtn = document.createElement("button");
+  syncRefreshBtn.textContent = "\u21BA Refresh Status";
+  syncRefreshBtn.style.cssText = btnStyle() + "margin-bottom: 8px; width: 100%;";
+  syncRefreshBtn.onclick = () => loadSyncStatus();
+  syncContent.appendChild(syncRefreshBtn);
 
-  const cnInputRow = document.createElement("div");
-  cnInputRow.style.cssText = "display:flex; gap:6px; margin-top:8px;";
+  // Sync Models button
+  const syncModelsBtn = document.createElement("button");
+  syncModelsBtn.textContent = "\u2B06 Sync Models";
+  syncModelsBtn.title = "Upload local models that are not yet on Modal";
+  syncModelsBtn.style.cssText = btnStyle("primary") + "margin-bottom: 4px;";
+  syncContent.appendChild(syncModelsBtn);
 
-  const cnInput = document.createElement("input");
-  cnInput.type = "text";
-  cnInput.placeholder = "e.g. https://github.com/ltdrdata/ComfyUI-Manager";
-  cnInput.style.cssText = inputStyle() + "flex:1;";
+  const syncModelsStatus = document.createElement("div");
+  syncModelsStatus.style.cssText = "font-size: 11px; color: #888; min-height: 14px; margin-bottom: 10px;";
+  syncContent.appendChild(syncModelsStatus);
 
-  const cnAddBtn = document.createElement("button");
-  cnAddBtn.textContent = "Add";
-  cnAddBtn.style.cssText = btnStyle();
+  // Sync Custom Nodes button
+  const syncCNBtn = document.createElement("button");
+  syncCNBtn.textContent = "\u2B06 Sync Custom Nodes";
+  syncCNBtn.title = "Package and upload local custom nodes to Modal";
+  syncCNBtn.style.cssText = btnStyle("primary") + "margin-bottom: 4px;";
+  syncContent.appendChild(syncCNBtn);
 
-  const cnRefreshBtn = document.createElement("button");
-  cnRefreshBtn.textContent = "\u21BA";
-  cnRefreshBtn.title = "Refresh custom nodes list";
-  cnRefreshBtn.style.cssText = btnStyle();
-  cnRefreshBtn.onclick = () => loadCustomNodes();
+  const syncCNStatus = document.createElement("div");
+  syncCNStatus.style.cssText = "font-size: 11px; color: #888; min-height: 14px;";
+  syncContent.appendChild(syncCNStatus);
 
-  cnInputRow.appendChild(cnInput);
-  cnInputRow.appendChild(cnAddBtn);
-  cnInputRow.appendChild(cnRefreshBtn);
-  cnContent.appendChild(cnInputRow);
-
-  let cnInstallStatus = {};
-  let cnStatusLoaded = false;
-
-  function renderCustomNodesList(nodes) {
-    cnListEl.innerHTML = "";
-    cnCollapsible.updateBadge(nodes ? nodes.length : 0);
-    if (nodes && nodes.length > 0) {
-      cnCollapsible.open();
-    }
-    if (!nodes || nodes.length === 0) {
-      const empty = document.createElement("div");
-      empty.style.cssText = "font-size:11px; color:#666; padding:4px 0;";
-      empty.textContent = "No custom nodes configured.";
-      cnListEl.appendChild(empty);
-      return;
-    }
-    for (const url of nodes) {
-      const repoName = url.replace(/\/$/, "").split("/").pop().replace(/\.git$/, "");
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
-
-      const name = document.createElement("span");
-      name.style.cssText = "flex:1; font-size:12px; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;";
-      name.title = url;
-      name.textContent = repoName;
-
-      const statusInfo = cnInstallStatus[url];
-      if (statusInfo) {
-        const badge = document.createElement("span");
-        badge.style.cssText = "font-size:10px; flex-shrink:0; padding:1px 4px; border-radius:3px;";
-        if (statusInfo.status === "ok") {
-          badge.style.color = "#7ed321";
-          badge.style.border = "1px solid #3a5";
-          badge.textContent = "\u2713";
-        } else {
-          badge.style.color = "#e05050";
-          badge.style.border = "1px solid #a33";
-          badge.textContent = "\u2717";
-          badge.title = statusInfo.error || "Install failed";
-        }
-        row.appendChild(name);
-        row.appendChild(badge);
-      } else if (cnStatusLoaded) {
-        const badge = document.createElement("span");
-        badge.style.cssText = "font-size:10px; flex-shrink:0; padding:1px 4px; border-radius:3px; color:#888; border:1px solid #555;";
-        badge.textContent = "?";
-        badge.title = "Deploy to check status";
-        row.appendChild(name);
-        row.appendChild(badge);
-      } else {
-        row.appendChild(name);
-      }
-
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "\u2715";
-      removeBtn.title = "Remove " + repoName;
-      removeBtn.style.cssText = `
-        background: transparent; border: 1px solid #555; color: #e05;
-        width: 20px; height: 20px; border-radius: 3px; cursor: pointer;
-        font-size: 11px; flex-shrink: 0; line-height: 1;
-        display: flex; align-items: center; justify-content: center;
-      `;
-      removeBtn.onclick = async () => {
-        removeBtn.disabled = true;
-        removeBtn.textContent = "\u2026";
-        try {
-          const r = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`, {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url }),
-          });
-          const data = await r.json();
-          if (data.status === "ok") {
-            renderCustomNodesList(data.nodes);
-            cnNotice.style.display = "flex";
-            _hasChanges = true;
-            updateStatusBanner();
-          }
-        } catch (e) {
-          removeBtn.disabled = false;
-          removeBtn.textContent = "\u2715";
-        }
-      };
-
-      row.appendChild(removeBtn);
-      cnListEl.appendChild(row);
-    }
-    cnCollapsible.refreshHeight();
-  }
-
-  async function loadCustomNodes() {
-    cnListEl.innerHTML = '<div style="color:#888;font-size:11px;">Loading...</div>';
+  // Button handlers
+  syncModelsBtn.onclick = async () => {
+    syncModelsBtn.disabled = true;
+    syncModelsBtn.textContent = "Syncing Models...";
+    syncModelsStatus.style.color = "#f5a623";
+    syncModelsStatus.textContent = "Uploading models to Modal volume...";
     try {
-      const resp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`);
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/sync/models`, { method: "POST" });
       const data = await resp.json();
-      renderCustomNodesList(data.nodes || []);
-    } catch (e) {
-      cnListEl.innerHTML = "";
-      const errDiv = document.createElement("div");
-      errDiv.style.cssText = "color:#e05;font-size:11px;";
-      errDiv.textContent = "Error: " + e.message;
-      cnListEl.appendChild(errDiv);
-    }
-    // Try to load install status
-    try {
-      const resp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes/status`);
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.status === "ok" && Array.isArray(data.nodes)) {
-          cnInstallStatus = {};
-          for (const n of data.nodes) {
-            cnInstallStatus[n.url] = n;
-          }
-          cnStatusLoaded = true;
-          // Re-render with status
-          const listResp = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`);
-          const listData = await listResp.json();
-          renderCustomNodesList(listData.nodes || []);
-        }
-      }
-    } catch {}
-  }
-
-  cnAddBtn.onclick = async () => {
-    const url = cnInput.value.trim();
-    if (!url) return;
-    if (!/^https?:\/\//i.test(url)) {
-      cnInput.style.borderColor = "#e05";
-      return;
-    }
-    cnInput.style.borderColor = "#444";
-    cnAddBtn.disabled = true;
-    try {
-      const r = await api.fetchApi(`${MODAL_PREFIX}/custom-nodes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await r.json();
       if (data.status === "ok") {
-        renderCustomNodesList(data.nodes);
-        cnInput.value = "";
-        cnNotice.style.display = "flex";
-        _hasChanges = true;
-        updateStatusBanner();
-        showToast("Custom node added!", "success");
+        syncModelsStatus.style.color = "#7ed321";
+        syncModelsStatus.textContent = data.uploaded > 0
+          ? `Done! ${data.uploaded}/${data.total} model(s) uploaded.`
+          : data.message || "All models already synced.";
+        showToast(data.uploaded > 0 ? `${data.uploaded} model(s) synced!` : "Models already synced", "success");
+        await loadSyncStatus();
+        await loadModels();
       } else {
-        cnInput.style.borderColor = "#e05";
+        throw new Error(data.message || "Sync failed");
       }
     } catch (e) {
-      cnInput.style.borderColor = "#e05";
+      syncModelsStatus.style.color = "#e05050";
+      syncModelsStatus.textContent = "Error: " + e.message;
+      showToast("Sync failed: " + e.message, "error");
     }
-    cnAddBtn.disabled = false;
+    syncModelsBtn.disabled = false;
+    syncModelsBtn.textContent = "\u2B06 Sync Models";
   };
 
-  cnInput.addEventListener("keydown", (e) => { if (e.key === "Enter") cnAddBtn.click(); });
+  syncCNBtn.onclick = async () => {
+    syncCNBtn.disabled = true;
+    syncCNBtn.textContent = "Syncing Custom Nodes...";
+    syncCNStatus.style.color = "#f5a623";
+    syncCNStatus.textContent = "Packaging and uploading custom nodes...";
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/sync/custom-nodes`, { method: "POST" });
+      const data = await resp.json();
+      if (data.status === "ok") {
+        const count = (data.nodes || []).length;
+        syncCNStatus.style.color = "#7ed321";
+        syncCNStatus.textContent = `Done! ${count} custom node(s) synced.`;
+        showToast(`${count} custom node(s) synced!`, "success");
+        await loadSyncStatus();
+      } else {
+        throw new Error(data.message || "Sync failed");
+      }
+    } catch (e) {
+      syncCNStatus.style.color = "#e05050";
+      syncCNStatus.textContent = "Error: " + e.message;
+      showToast("Sync failed: " + e.message, "error");
+    }
+    syncCNBtn.disabled = false;
+    syncCNBtn.textContent = "\u2B06 Sync Custom Nodes";
+  };
 
-  scrollContent.appendChild(cnCollapsible.wrapper);
+  async function loadSyncStatus() {
+    if (!syncStatusEl) return;
+    syncStatusEl.style.color = "#aaa";
+    syncStatusEl.textContent = "Loading...";
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/sync/status`);
+      if (resp.status === 503) {
+        syncStatusEl.innerHTML = '<span style="color:#888;">Deploy the app first to check sync status.</span>';
+        syncCollapsible.refreshHeight();
+        return;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (data.status !== "ok") throw new Error(data.message || "Unknown error");
+
+      const ms = data.models || {};
+      const cn = data.custom_nodes || {};
+      const syncedModels = (ms.synced || []).length;
+      const pendingModels = (ms.pending || []).length;
+      const totalLocalModels = (ms.local || []).length;
+      const syncedCN = (cn.synced || []).length;
+      const pendingCN = (cn.pending || []).length;
+      const totalLocalCN = (cn.local || []).length;
+
+      syncStatusEl.innerHTML = `
+        <div style="margin-bottom:4px;">
+          <strong>Models:</strong> ${syncedModels} synced / ${totalLocalModels} local
+          ${pendingModels > 0 ? `<span style="color:#f5a623;"> (${pendingModels} pending upload)</span>` : '<span style="color:#7ed321;"> \u2713</span>'}
+        </div>
+        <div>
+          <strong>Custom Nodes:</strong> ${syncedCN} synced / ${totalLocalCN} local
+          ${pendingCN > 0 ? `<span style="color:#f5a623;"> (${pendingCN} pending upload)</span>` : '<span style="color:#7ed321;"> \u2713</span>'}
+        </div>
+      `;
+      syncCollapsible.updateBadge(pendingModels + pendingCN > 0 ? `${pendingModels + pendingCN}` : "\u2713");
+      syncCollapsible.refreshHeight();
+    } catch (e) {
+      syncStatusEl.style.color = "#e05050";
+      syncStatusEl.textContent = "Error: " + e.message;
+      syncCollapsible.refreshHeight();
+    }
+  }
+
+  scrollContent.appendChild(syncCollapsible.wrapper);
 
   // === MODELS SECTION (Collapsible, default open) ===
   const modelsCollapsible = createCollapsibleSection("Models", { defaultOpen: true, badge: "..." });
@@ -1283,12 +1169,6 @@ function buildPanel() {
       const data = await resp.json();
       if (data.status === "ok") {
         showToast("Model downloaded!", "success");
-        // Auto-inject
-        await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ folder, filename }),
-        }).catch(() => {});
         urlInput.value = "";
         filenameInput.value = "";
         await loadModels();
@@ -1384,7 +1264,6 @@ function buildPanel() {
       const data = await resp.json();
 
       if (data.status === "ok") {
-        const injectPromises = [];
         data.results.forEach((res, i) => {
           const entry = pending[i];
           if (!entry) return;
@@ -1393,15 +1272,7 @@ function buildPanel() {
             entry.statusEl.textContent = res.skipped ? "\u2713 already exists" : "\u2713 done";
             entry.statusEl.style.color = "#7ed321";
           }
-          injectPromises.push(
-            api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ folder: entry.folder, filename: entry.filename }),
-            }).catch(() => {})
-          );
         });
-        await Promise.all(injectPromises);
         batchStatusEl.style.color = "#7ed321";
         batchStatusEl.textContent = `Done - ${pending.length} model(s) downloaded.`;
         showToast(`${pending.length} model(s) downloaded!`, "success");
@@ -1552,7 +1423,7 @@ function buildPanel() {
   };
 
   // === Modal sections toggle ===
-  const modalSectionElements = [gpuSection, cnCollapsible.wrapper, modelsCollapsible.wrapper, addSection];
+  const modalSectionElements = [gpuSection, syncCollapsible.wrapper, modelsCollapsible.wrapper, addSection];
 
   function updateModalSections(enabled) {
     for (const el of modalSectionElements) {
@@ -1580,7 +1451,7 @@ function buildPanel() {
 
   startDeployPoll();
   loadModels();
-  loadCustomNodes();
+  loadSyncStatus();
 
   return panel;
 }
