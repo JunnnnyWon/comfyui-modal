@@ -149,8 +149,8 @@ def _run_deploy_background():
             if _modal_available:
                 try:
                     clear_cache()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[comfyui-modal] clear_cache failed: {e}")
         else:
             stderr = result.stderr.strip()
             if "token" in stderr.lower() or "auth" in stderr.lower() or "credentials" in stderr.lower():
