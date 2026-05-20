@@ -237,6 +237,7 @@ class _ComfyAPIMixin:
     @modal.method()
     def run_prompt(self, workflow: dict, input_images: dict = None) -> dict:
         import urllib.request
+        import urllib.error
         import base64
         from pathlib import Path
 
@@ -257,8 +258,33 @@ class _ComfyAPIMixin:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req) as r:
-            queued = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(req) as r:
+                queued = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # Read the response body for validation error details
+            error_body = ""
+            try:
+                error_body = e.read().decode("utf-8", errors="replace")
+                error_data = json.loads(error_body)
+                # Extract meaningful error info from ComfyUI's response
+                node_errors = error_data.get("node_errors", {})
+                if node_errors:
+                    msgs = []
+                    for node_id, err_info in node_errors.items():
+                        class_type = err_info.get("class_type", f"Node {node_id}")
+                        for err in err_info.get("errors", []):
+                            msgs.append(f"{class_type}: {err.get('message', 'unknown error')}")
+                    if msgs:
+                        raise RuntimeError(f"Workflow validation failed: {'; '.join(msgs)}") from e
+                # Fallback: use the message field
+                msg = error_data.get("message", "") or error_data.get("error", "")
+                if msg:
+                    raise RuntimeError(f"Workflow validation failed: {msg}") from e
+            except (json.JSONDecodeError, RuntimeError):
+                if isinstance(sys.exc_info()[1], RuntimeError):
+                    raise
+            raise RuntimeError(f"ComfyUI rejected the prompt (HTTP {e.code}): {error_body[:500]}") from e
 
         prompt_id = queued["prompt_id"]
         return self._poll_until_done(prompt_id, client_id)
