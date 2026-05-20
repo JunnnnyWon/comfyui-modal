@@ -183,6 +183,28 @@ def _run_deploy_background():
                     clear_cache()
                 except Exception as e:
                     print(f"[comfyui-modal] clear_cache failed: {e}")
+                # Check custom node install status after successful deploy
+                custom_nodes = _read_custom_nodes()
+                if custom_nodes:
+                    try:
+                        loop = asyncio.new_event_loop()
+                        cn_status = loop.run_until_complete(get_custom_node_status())
+                        loop.close()
+                        failed_nodes = [n for n in cn_status if n.get("status") == "error"]
+                        if failed_nodes:
+                            names = ", ".join(n.get("name", "unknown") for n in failed_nodes)
+                            warning = f"Deployed v{version}, but {len(failed_nodes)} node(s) failed to install: {names}"
+                            _deploy_status = {
+                                "state": "ready",
+                                "message": warning,
+                                "warning": True,
+                                "failed_nodes": failed_nodes,
+                            }
+                            print(f"[comfyui-modal] WARNING: {warning}")
+                            for fn in failed_nodes:
+                                print(f"[comfyui-modal]   - {fn.get('name')}: {fn.get('error', 'unknown error')}")
+                    except Exception as e:
+                        print(f"[comfyui-modal] Could not check custom node status: {e}")
         else:
             combined = combined_output.strip()
             if "token" in combined.lower() or "auth" in combined.lower() or "credentials" in combined.lower():
