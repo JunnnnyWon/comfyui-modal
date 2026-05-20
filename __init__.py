@@ -9,8 +9,6 @@ import copy
 import threading
 import subprocess
 import time
-import glob
-
 from aiohttp import web
 
 NODE_CLASS_MAPPINGS = {}
@@ -30,7 +28,6 @@ def _unique_path(directory: str, filename: str) -> str:
 _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
-_CUSTOM_NODES_FILE = os.path.join(_NODE_DIR, ".custom_nodes.json")
 _DEPLOY_LOG_FILE = os.path.join(_NODE_DIR, ".deploy_log")
 
 _pip_install_error = ""
@@ -62,18 +59,6 @@ def _ensure_modal():
 
 _ensure_modal()
 
-
-def _read_custom_nodes():
-    try:
-        with open(_CUSTOM_NODES_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-
-def _write_custom_nodes(nodes):
-    with open(_CUSTOM_NODES_FILE, "w") as f:
-        json.dump(nodes, f, indent=2)
 
 _deploy_status = {"state": "idle", "message": ""}
 
@@ -183,28 +168,6 @@ def _run_deploy_background():
                     clear_cache()
                 except Exception as e:
                     print(f"[comfyui-modal] clear_cache failed: {e}")
-                # Check custom node install status after successful deploy
-                custom_nodes = _read_custom_nodes()
-                if custom_nodes:
-                    try:
-                        loop = asyncio.new_event_loop()
-                        cn_status = loop.run_until_complete(get_custom_node_status())
-                        loop.close()
-                        failed_nodes = [n for n in cn_status if n.get("status") == "error"]
-                        if failed_nodes:
-                            names = ", ".join(n.get("name", "unknown") for n in failed_nodes)
-                            warning = f"Deployed v{version}, but {len(failed_nodes)} node(s) failed to install: {names}"
-                            _deploy_status = {
-                                "state": "ready",
-                                "message": warning,
-                                "warning": True,
-                                "failed_nodes": failed_nodes,
-                            }
-                            print(f"[comfyui-modal] WARNING: {warning}")
-                            for fn in failed_nodes:
-                                print(f"[comfyui-modal]   - {fn.get('name')}: {fn.get('error', 'unknown error')}")
-                    except Exception as e:
-                        print(f"[comfyui-modal] Could not check custom node status: {e}")
         else:
             combined = combined_output.strip()
             if "token" in combined.lower() or "auth" in combined.lower() or "credentials" in combined.lower():
@@ -255,7 +218,7 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status, clear_cache
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, sync_custom_nodes, get_sync_status, upload_model_to_volume, clear_cache
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
@@ -273,7 +236,9 @@ except ImportError:
     def batch_download_models(*a, **kw): raise RuntimeError("modal not installed")
     def list_models(*a, **kw): raise RuntimeError("modal not installed")
     def delete_model(*a, **kw): raise RuntimeError("modal not installed")
-    def get_custom_node_status(*a, **kw): raise RuntimeError("modal not installed")
+    def sync_custom_nodes(*a, **kw): raise RuntimeError("modal not installed")
+    def get_sync_status(*a, **kw): raise RuntimeError("modal not installed")
+    def upload_model_to_volume(*a, **kw): raise RuntimeError("modal not installed")
     def set_gpu(gpu): pass
     def get_gpu(): return "a10g"
 
@@ -306,64 +271,6 @@ def _write_modal_toml(token_id: str, token_secret: str):
     os.makedirs(os.path.dirname(_MODAL_TOML_PATH), exist_ok=True)
     with open(_MODAL_TOML_PATH, "w") as f:
         f.write(content)
-
-
-def _sync_model_placeholders(modal_models: dict):
-    """Sync local modal- placeholder files with the models available on Modal."""
-    models_root = os.path.join(_COMFYUI_ROOT, "models")
-
-    # Build set of expected placeholders per folder
-    expected_by_folder = {}
-    for key, items in modal_models.items():
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name", "")
-            folder = item.get("folder", key)
-            if not name or not folder:
-                continue
-            folder = os.path.basename(folder)
-            name = os.path.basename(name)
-            placeholder_name = f"modal-{name}"
-            expected_by_folder.setdefault(folder, set()).add(placeholder_name)
-
-    # Create missing placeholders
-    for folder, expected_files in expected_by_folder.items():
-        local_dir = os.path.join(models_root, folder)
-        try:
-            os.makedirs(local_dir, exist_ok=True)
-        except Exception as e:
-            print(f"[comfyui-modal] Warning: could not create directory {local_dir}: {e}")
-            continue
-        for placeholder_name in expected_files:
-            dest = os.path.join(local_dir, placeholder_name)
-            try:
-                if not os.path.exists(dest):
-                    with open(dest, "wb"):
-                        pass
-            except Exception as e:
-                print(f"[comfyui-modal] Warning: could not create placeholder {dest}: {e}")
-
-    # Remove stale placeholders
-    all_expected = set()
-    for folder, expected_files in expected_by_folder.items():
-        for f in expected_files:
-            all_expected.add(os.path.join(models_root, folder, f))
-
-    try:
-        existing_placeholders = glob.glob(os.path.join(models_root, "*", "modal-*"))
-    except Exception as e:
-        print(f"[comfyui-modal] Warning: could not scan for stale placeholders: {e}")
-        return
-
-    for existing_path in existing_placeholders:
-        if existing_path not in all_expected:
-            try:
-                os.remove(existing_path)
-            except Exception as e:
-                print(f"[comfyui-modal] Warning: could not remove stale placeholder {existing_path}: {e}")
 
 
 _queue: asyncio.Queue = asyncio.Queue()
@@ -715,32 +622,10 @@ if _server:
         client_id = request.match_info.get("client_id", "")
         return web.json_response({"status": "not_supported"}, status=404)
 
-    @_server.routes.post("/comfymodal/models/inject")
-    async def modal_inject_placeholder(request: web.Request) -> web.Response:
-        body = await request.json()
-        folder = os.path.basename(body.get("folder", ""))
-        filename = os.path.basename(body.get("filename", ""))
-        if not folder or not filename:
-            return web.json_response({"status": "error", "message": "folder and filename required"}, status=400)
-
-        prefixed = f"modal-{filename}"
-        local_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", folder)
-        os.makedirs(local_dir, exist_ok=True)
-        dest = os.path.join(local_dir, prefixed)
-
-        if not os.path.exists(dest):
-            open(dest, "wb").close()
-
-        return web.json_response({"status": "ok", "local_path": dest, "name": prefixed})
-
     @_server.routes.get("/comfymodal/models")
     async def modal_list_models(request: web.Request) -> web.Response:
         try:
             result = await list_models()
-            try:
-                _sync_model_placeholders(result)
-            except Exception as e:
-                print(f"[comfyui-modal] Warning: placeholder sync failed: {e}")
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=503)
@@ -757,46 +642,157 @@ if _server:
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-    @_server.routes.get("/comfymodal/custom-nodes")
-    async def modal_custom_nodes_get(request: web.Request) -> web.Response:
-        nodes = _read_custom_nodes()
-        return web.json_response({"nodes": nodes})
-
-    @_server.routes.post("/comfymodal/custom-nodes")
-    async def modal_custom_nodes_add(request: web.Request) -> web.Response:
-        body = await request.json()
-        url = body.get("url", "").strip()
-        if not url:
-            return web.json_response({"status": "error", "message": "url required"}, status=400)
-        if not url.startswith("http://") and not url.startswith("https://"):
-            return web.json_response({"status": "error", "message": "url must start with http:// or https://"}, status=400)
-        if not re.match(r'^https?://[a-zA-Z0-9._\-/~@:]+$', url):
-            return web.json_response({"status": "error", "message": "url contains invalid characters"}, status=400)
-        # Normalize: strip trailing slash and .git suffix
-        url = url.rstrip('/')
-        if url.endswith('.git'):
-            url = url[:-4]
-        nodes = _read_custom_nodes()
-        if url not in nodes:
-            nodes.append(url)
-            _write_custom_nodes(nodes)
-        return web.json_response({"status": "ok", "nodes": nodes})
-
-    @_server.routes.delete("/comfymodal/custom-nodes")
-    async def modal_custom_nodes_remove(request: web.Request) -> web.Response:
-        body = await request.json()
-        url = body.get("url", "").strip()
-        nodes = _read_custom_nodes()
-        nodes = [n for n in nodes if n != url]
-        _write_custom_nodes(nodes)
-        return web.json_response({"status": "ok", "nodes": nodes})
-
-    @_server.routes.get("/comfymodal/custom-nodes/status")
-    async def modal_custom_nodes_status(request: web.Request) -> web.Response:
+    @_server.routes.get("/comfymodal/sync/status")
+    async def modal_sync_status(request: web.Request) -> web.Response:
+        """Get sync status: compare local models/custom_nodes with remote volumes."""
         try:
-            result = await get_custom_node_status()
-            return web.json_response({"status": "ok", "nodes": result})
+            # Get remote volume status
+            remote = await get_sync_status()
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=503)
 
-    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models, /comfymodal/custom-nodes")
+        # Scan local models
+        models_root = os.path.join(_COMFYUI_ROOT, "models")
+        local_models = []
+        if os.path.isdir(models_root):
+            for folder in os.listdir(models_root):
+                folder_path = os.path.join(models_root, folder)
+                if not os.path.isdir(folder_path):
+                    continue
+                for fname in os.listdir(folder_path):
+                    fpath = os.path.join(folder_path, fname)
+                    if os.path.isfile(fpath) and not fname.startswith("."):
+                        size = os.path.getsize(fpath)
+                        if size > 0:  # skip empty placeholder files
+                            local_models.append({"folder": folder, "name": fname, "size": size})
+
+        # Scan local custom nodes
+        cn_root = os.path.join(_COMFYUI_ROOT, "custom_nodes")
+        local_custom_nodes = []
+        if os.path.isdir(cn_root):
+            for d in os.listdir(cn_root):
+                dpath = os.path.join(cn_root, d)
+                if os.path.isdir(dpath) and not d.startswith(".") and d != "__pycache__":
+                    local_custom_nodes.append(d)
+
+        # Compare
+        remote_models = remote.get("models", [])
+        remote_model_keys = {f"{m['folder']}/{m['name']}" for m in remote_models}
+        local_model_keys = {f"{m['folder']}/{m['name']}" for m in local_models}
+
+        synced_models = [m for m in local_models if f"{m['folder']}/{m['name']}" in remote_model_keys]
+        pending_models = [m for m in local_models if f"{m['folder']}/{m['name']}" not in remote_model_keys]
+
+        remote_cn = set(remote.get("custom_nodes", []))
+        local_cn_set = set(local_custom_nodes)
+        synced_cn = sorted(local_cn_set & remote_cn)
+        pending_cn = sorted(local_cn_set - remote_cn)
+
+        return web.json_response({
+            "status": "ok",
+            "models": {
+                "local": local_models,
+                "remote": remote_models,
+                "synced": synced_models,
+                "pending": pending_models,
+            },
+            "custom_nodes": {
+                "local": local_custom_nodes,
+                "remote": sorted(remote_cn),
+                "synced": synced_cn,
+                "pending": pending_cn,
+            },
+        })
+
+    @_server.routes.post("/comfymodal/sync/models")
+    async def modal_sync_models(request: web.Request) -> web.Response:
+        """Upload local models that are not yet on the remote volume."""
+        try:
+            remote = await get_sync_status()
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=503)
+
+        remote_model_keys = {f"{m['folder']}/{m['name']}" for m in remote.get("models", [])}
+
+        # Scan local models
+        models_root = os.path.join(_COMFYUI_ROOT, "models")
+        to_upload = []
+        if os.path.isdir(models_root):
+            for folder in os.listdir(models_root):
+                folder_path = os.path.join(models_root, folder)
+                if not os.path.isdir(folder_path):
+                    continue
+                for fname in os.listdir(folder_path):
+                    fpath = os.path.join(folder_path, fname)
+                    if not os.path.isfile(fpath) or fname.startswith("."):
+                        continue
+                    size = os.path.getsize(fpath)
+                    if size == 0:
+                        continue
+                    key = f"{folder}/{fname}"
+                    if key not in remote_model_keys:
+                        to_upload.append({"folder": folder, "name": fname, "path": fpath, "size": size})
+
+        if not to_upload:
+            return web.json_response({"status": "ok", "message": "All models already synced", "uploaded": 0})
+
+        uploaded = 0
+        errors = []
+        for item in to_upload:
+            try:
+                with open(item["path"], "rb") as f:
+                    file_data = f.read()
+                await upload_model_to_volume(file_data=file_data, folder=item["folder"], filename=item["name"])
+                uploaded += 1
+            except Exception as e:
+                errors.append({"name": f"{item['folder']}/{item['name']}", "error": str(e)})
+
+        result = {"status": "ok", "uploaded": uploaded, "total": len(to_upload)}
+        if errors:
+            result["errors"] = errors
+        return web.json_response(result)
+
+    @_server.routes.post("/comfymodal/sync/custom-nodes")
+    async def modal_sync_custom_nodes(request: web.Request) -> web.Response:
+        """Package local custom_nodes directory and upload to Modal volume."""
+        import tarfile
+        import io
+
+        cn_root = os.path.join(_COMFYUI_ROOT, "custom_nodes")
+        if not os.path.isdir(cn_root):
+            return web.json_response({"status": "error", "message": "custom_nodes directory not found"}, status=400)
+
+        # Exclusion patterns
+        exclude_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+        exclude_extensions = {".pyc", ".pyo"}
+
+        def tar_filter(tarinfo):
+            # Skip excluded directories and files
+            parts = tarinfo.name.split("/")
+            for part in parts:
+                if part in exclude_dirs:
+                    return None
+            if any(tarinfo.name.endswith(ext) for ext in exclude_extensions):
+                return None
+            return tarinfo
+
+        # Create tar.gz archive
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for node_dir in os.listdir(cn_root):
+                node_path = os.path.join(cn_root, node_dir)
+                if not os.path.isdir(node_path):
+                    continue
+                if node_dir.startswith(".") or node_dir == "__pycache__":
+                    continue
+                tar.add(node_path, arcname=node_dir, filter=tar_filter)
+
+        archive_data = buf.getvalue()
+
+        try:
+            result = await sync_custom_nodes(archive_data)
+            return web.json_response(result)
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models, /comfymodal/sync/status, /comfymodal/sync/models, /comfymodal/sync/custom-nodes")
