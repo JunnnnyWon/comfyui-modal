@@ -51,6 +51,7 @@ let currentStatus = STATUS.UNKNOWN;
 let dotEl = null;
 let statusEl = null;
 let modelListEl = null;
+let modelsCollapsibleRef = null;
 let statusBannerEl = null;
 let statusBannerTextEl = null;
 let _deployPollTimer = null;
@@ -180,6 +181,8 @@ api.addEventListener("execution_error", () => setStatus(STATUS.OFFLINE));
 // --- Toast notification ---
 function showToast(message, type) {
   const toast = document.createElement("div");
+  toast.setAttribute("role", "alert");
+  toast.setAttribute("aria-live", "polite");
   const bgMap = { success: "#1a3a1a", error: "#3d1010", info: "#1a2a3a" };
   const colorMap = { success: "#7ed321", error: "#e05050", info: "#6a9fd8" };
   toast.style.cssText = `
@@ -295,14 +298,30 @@ async function loadModels() {
     const resp = await api.fetchApi(`${MODAL_PREFIX}/models`);
     if (resp.status === 503) {
       modelListEl.innerHTML = `<div style="color:#888;font-size:12px;line-height:1.6;">Modal app not deployed yet.<br>Click <b>Deploy to Cloud</b> above to get started.</div>`;
+      if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
       return;
     }
     if (!resp.ok) throw new Error(resp.status);
     const data = await resp.json();
     renderModelList(data);
   } catch (e) {
-    modelListEl.innerHTML = `<div style="color:#e05;font-size:12px;">Error loading models</div>
-      <details style="font-size:11px;color:#888;margin-top:4px;"><summary style="cursor:pointer;color:#aaa;">Show details</summary><p style="margin:4px 0 0;font-family:monospace;">${e.message}</p></details>`;
+    modelListEl.innerHTML = "";
+    const errDiv = document.createElement("div");
+    errDiv.style.cssText = "color:#e05;font-size:12px;";
+    errDiv.textContent = "Error loading models";
+    const details = document.createElement("details");
+    details.style.cssText = "font-size:11px;color:#888;margin-top:4px;";
+    const summary = document.createElement("summary");
+    summary.style.cssText = "cursor:pointer;color:#aaa;";
+    summary.textContent = "Show details";
+    const msgP = document.createElement("p");
+    msgP.style.cssText = "margin:4px 0 0;font-family:monospace;";
+    msgP.textContent = e.message;
+    details.appendChild(summary);
+    details.appendChild(msgP);
+    modelListEl.appendChild(errDiv);
+    modelListEl.appendChild(details);
+    if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
   }
 }
 
@@ -435,6 +454,7 @@ function renderModelList(data) {
   if (!hasAny) {
     modelListEl.innerHTML = `<div style="color:#666;font-size:12px;padding:8px 0;">No models in volume.</div>`;
   }
+  if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
 }
 
 // --- Download queue ---
@@ -970,7 +990,11 @@ function buildPanel() {
       const data = await resp.json();
       renderCustomNodesList(data.nodes || []);
     } catch (e) {
-      cnListEl.innerHTML = `<div style="color:#e05;font-size:11px;">Error: ${e.message}</div>`;
+      cnListEl.innerHTML = "";
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "color:#e05;font-size:11px;";
+      errDiv.textContent = "Error: " + e.message;
+      cnListEl.appendChild(errDiv);
     }
     // Try to load install status
     try {
@@ -1030,6 +1054,7 @@ function buildPanel() {
 
   // === MODELS SECTION (Collapsible, default open) ===
   const modelsCollapsible = createCollapsibleSection("Models", { defaultOpen: true, badge: "..." });
+  modelsCollapsibleRef = modelsCollapsible;
   const modelsContent = modelsCollapsible.content;
 
   modelListEl = document.createElement("div");
@@ -1330,7 +1355,15 @@ function buildPanel() {
       const r = await api.fetchApi(`${MODAL_PREFIX}/hf-token`);
       const d = await r.json();
       if (d.token) {
-        hfStatus.innerHTML = `<span style="color:#7ed321; background:#1a3a1a; padding:2px 6px; border-radius:3px; font-size:10px;">Saved</span> <span style="color:#666;">${d.token}</span>`;
+        hfStatus.innerHTML = "";
+        const badge = document.createElement("span");
+        badge.style.cssText = "color:#7ed321; background:#1a3a1a; padding:2px 6px; border-radius:3px; font-size:10px;";
+        badge.textContent = "Saved";
+        const tokenSpan = document.createElement("span");
+        tokenSpan.style.cssText = "color:#666; margin-left:6px;";
+        tokenSpan.textContent = d.token;
+        hfStatus.appendChild(badge);
+        hfStatus.appendChild(tokenSpan);
       }
     } catch {}
   })();
