@@ -9,6 +9,7 @@ import copy
 import threading
 import subprocess
 import time
+import glob
 
 from aiohttp import web
 
@@ -30,19 +31,34 @@ _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
 _CUSTOM_NODES_FILE = os.path.join(_NODE_DIR, ".custom_nodes.json")
+_DEPLOY_LOG_FILE = os.path.join(_NODE_DIR, ".deploy_log")
+
+_pip_install_error = ""
 
 def _ensure_modal():
+    global _pip_install_error
     try:
         import modal  # noqa: F401
         return
     except ImportError:
         pass
     print("[comfyui-modal] 'modal' package not found — installing...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "modal"],
-        check=True,
-    )
-    print("[comfyui-modal] 'modal' installed successfully.")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "modal"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("[comfyui-modal] 'modal' installed successfully.")
+    except subprocess.CalledProcessError as e:
+        _pip_install_error = e.stderr or str(e)
+        print(f"[comfyui-modal] ERROR: Failed to install 'modal' package: {e.stderr}")
+        print("[comfyui-modal] Please install manually: pip install modal")
+    except Exception as e:
+        _pip_install_error = str(e)
+        print(f"[comfyui-modal] ERROR: Unexpected error installing 'modal': {e}")
+        print("[comfyui-modal] Please install manually: pip install modal")
 
 _ensure_modal()
 
@@ -102,6 +118,27 @@ def _find_modal_executable():
             return c
     return None
 
+def _parse_deploy_error(output):
+    """Try to extract specific failure info from deploy output."""
+    # Look for pip install failures
+    m = re.search(r"ERROR: Could not find a version that satisfies the requirement (\S+)", output)
+    if m:
+        return f"Failed package: {m.group(1)}."
+    m = re.search(r"ERROR: No matching distribution found for (\S+)", output)
+    if m:
+        return f"Failed package: {m.group(1)}."
+    if "conflicting dependencies" in output.lower():
+        m = re.search(r"(\S+) requires (\S+)", output)
+        if m:
+            return f"Conflicting dependencies: {m.group(1)} requires {m.group(2)}."
+        return "Conflicting dependencies detected."
+    # Look for failed node install
+    m = re.search(r"Installing (\S+).{0,200}?(?:error|failed|Error)", output, re.IGNORECASE)
+    if m:
+        return f"Failed node: {m.group(1)}."
+    return ""
+
+
 def _run_deploy_background():
     global _deploy_status
 
@@ -124,27 +161,71 @@ def _run_deploy_background():
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=600,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
+        combined_output = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        # Always write full log
+        try:
+            with open(_DEPLOY_LOG_FILE, "w", encoding="utf-8") as f:
+                f.write(combined_output)
+        except Exception as e:
+            print(f"[comfyui-modal] Warning: could not write deploy log: {e}")
+
         if result.returncode == 0:
             version = _get_comfyapp_version()
             _set_deployed_version(version)
             _deploy_status = {"state": "ready", "message": f"Deployed v{version}"}
             print(f"[comfyui-modal] Deploy succeeded (v{version})")
+            if _modal_available:
+                try:
+                    clear_cache()
+                except Exception as e:
+                    print(f"[comfyui-modal] clear_cache failed: {e}")
+                # Check custom node install status after successful deploy
+                custom_nodes = _read_custom_nodes()
+                if custom_nodes:
+                    try:
+                        loop = asyncio.new_event_loop()
+                        cn_status = loop.run_until_complete(get_custom_node_status())
+                        loop.close()
+                        failed_nodes = [n for n in cn_status if n.get("status") == "error"]
+                        if failed_nodes:
+                            names = ", ".join(n.get("name", "unknown") for n in failed_nodes)
+                            warning = f"Deployed v{version}, but {len(failed_nodes)} node(s) failed to install: {names}"
+                            _deploy_status = {
+                                "state": "ready",
+                                "message": warning,
+                                "warning": True,
+                                "failed_nodes": failed_nodes,
+                            }
+                            print(f"[comfyui-modal] WARNING: {warning}")
+                            for fn in failed_nodes:
+                                print(f"[comfyui-modal]   - {fn.get('name')}: {fn.get('error', 'unknown error')}")
+                    except Exception as e:
+                        print(f"[comfyui-modal] Could not check custom node status: {e}")
         else:
-            stderr = result.stderr.strip()
-            if "token" in stderr.lower() or "auth" in stderr.lower() or "credentials" in stderr.lower():
+            combined = combined_output.strip()
+            if "token" in combined.lower() or "auth" in combined.lower() or "credentials" in combined.lower():
                 msg = "Modal token not set. Run: modal setup"
             else:
-                msg = f"Deploy failed: {stderr[:200]}"
-            _deploy_status = {"state": "error", "message": msg}
-            print(f"[comfyui-modal] {msg}")
+                error_prefix = _parse_deploy_error(combined)
+                truncated = combined[:2000]
+                msg = f"Deploy failed: {truncated}"
+                if error_prefix:
+                    msg = f"{error_prefix} {msg}"
+            _deploy_status = {
+                "state": "error",
+                "message": msg,
+                "details": combined[:2000],
+            }
+            print(f"[comfyui-modal] {msg[:500]}")
     except subprocess.TimeoutExpired:
-        _deploy_status = {"state": "error", "message": "Deploy timed out (5 min)"}
+        _deploy_status = {"state": "error", "message": "Deploy timed out (10 min)", "details": "Deploy timed out after 10 minutes"}
         print(f"[comfyui-modal] Deploy timed out")
     except Exception as e:
-        _deploy_status = {"state": "error", "message": str(e)}
+        _deploy_status = {"state": "error", "message": str(e), "details": str(e)}
         print(f"[comfyui-modal] Deploy error: {e}")
 
 def _maybe_auto_deploy():
@@ -174,13 +255,17 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status, clear_cache
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
-    print("[comfyui-modal] WARNING: 'modal' package not installed. Run: pip install modal")
+    _err_detail = f" (install error: {_pip_install_error})" if _pip_install_error else ""
+    print(f"[comfyui-modal] WARNING: 'modal' package not installed.{_err_detail} Run: pip install modal")
     _modal_available = False
-    _deploy_status = {"state": "error", "message": "modal package not installed. Run: pip install modal"}
+    _deploy_msg = "modal package not installed. Run: pip install modal"
+    if _pip_install_error:
+        _deploy_msg += f" (pip error: {_pip_install_error})"
+    _deploy_status = {"state": "error", "message": _deploy_msg}
     def run_prompt(*a, **kw): raise RuntimeError("modal not installed")
     def get_object_info(*a, **kw): raise RuntimeError("modal not installed")
     def health_check(*a, **kw): raise RuntimeError("modal not installed")
@@ -223,9 +308,68 @@ def _write_modal_toml(token_id: str, token_secret: str):
         f.write(content)
 
 
+def _sync_model_placeholders(modal_models: dict):
+    """Sync local modal- placeholder files with the models available on Modal."""
+    models_root = os.path.join(_COMFYUI_ROOT, "models")
+
+    # Build set of expected placeholders per folder
+    expected_by_folder = {}
+    for key, items in modal_models.items():
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            folder = item.get("folder", key)
+            if not name or not folder:
+                continue
+            folder = os.path.basename(folder)
+            name = os.path.basename(name)
+            placeholder_name = f"modal-{name}"
+            expected_by_folder.setdefault(folder, set()).add(placeholder_name)
+
+    # Create missing placeholders
+    for folder, expected_files in expected_by_folder.items():
+        local_dir = os.path.join(models_root, folder)
+        try:
+            os.makedirs(local_dir, exist_ok=True)
+        except Exception as e:
+            print(f"[comfyui-modal] Warning: could not create directory {local_dir}: {e}")
+            continue
+        for placeholder_name in expected_files:
+            dest = os.path.join(local_dir, placeholder_name)
+            try:
+                if not os.path.exists(dest):
+                    with open(dest, "wb"):
+                        pass
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: could not create placeholder {dest}: {e}")
+
+    # Remove stale placeholders
+    all_expected = set()
+    for folder, expected_files in expected_by_folder.items():
+        for f in expected_files:
+            all_expected.add(os.path.join(models_root, folder, f))
+
+    try:
+        existing_placeholders = glob.glob(os.path.join(models_root, "*", "modal-*"))
+    except Exception as e:
+        print(f"[comfyui-modal] Warning: could not scan for stale placeholders: {e}")
+        return
+
+    for existing_path in existing_placeholders:
+        if existing_path not in all_expected:
+            try:
+                os.remove(existing_path)
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: could not remove stale placeholder {existing_path}: {e}")
+
+
 _queue: asyncio.Queue = asyncio.Queue()
 _queue_worker_started = False
 _item_counter = 0
+_counter_lock = asyncio.Lock()
 
 
 def _send(sid: str, event: str, data: dict):
@@ -287,10 +431,13 @@ def _collect_input_images(workflow: dict) -> dict:
     for node in workflow.values():
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") != "LoadImage":
+        class_type = node.get("class_type", "")
+        if not class_type.startswith("LoadImage"):
             continue
-        filename = node.get("inputs", {}).get("image", "")
+        filename = node.get("inputs", {}).get("image", "") or node.get("inputs", {}).get("mask", "")
         if not filename or filename in images:
+            continue
+        if filename.startswith("http://") or filename.startswith("https://"):
             continue
         for d in search_dirs:
             candidate = os.path.join(d, filename)
@@ -431,10 +578,11 @@ if _server:
         prompt_id = str(uuid.uuid4())
 
         import time
-        _item_counter += 1
-        item_id = _item_counter
-        extra_data = {"client_id": client_id, "create_time": int(time.time() * 1000)}
-        item = (_item_counter, prompt_id, workflow, extra_data, list(workflow.keys()), {})
+        async with _counter_lock:
+            _item_counter += 1
+            item_id = _item_counter
+            extra_data = {"client_id": client_id, "create_time": int(time.time() * 1000)}
+            item = (_item_counter, prompt_id, workflow, extra_data, list(workflow.keys()), {})
 
         pq = _pq()
         if pq:
@@ -491,7 +639,28 @@ if _server:
 
     @_server.routes.get("/comfymodal/deploy/status")
     async def modal_deploy_status(request: web.Request) -> web.Response:
-        return web.json_response(_deploy_status)
+        resp = dict(_deploy_status)
+        resp.setdefault("has_log", os.path.isfile(_DEPLOY_LOG_FILE))
+        if resp.get("state") != "error":
+            resp.setdefault("details", "")
+        return web.json_response(resp)
+
+    @_server.routes.get("/comfymodal/deploy/log")
+    async def modal_deploy_log(request: web.Request) -> web.Response:
+        try:
+            file_size = os.path.getsize(_DEPLOY_LOG_FILE)
+            max_bytes = 512000  # 500KB
+            with open(_DEPLOY_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                if file_size > max_bytes:
+                    f.seek(file_size - max_bytes)
+                    # Discard partial first line after seek
+                    f.readline()
+                    log = "[...truncated, showing last 500KB...]\n" + f.read()
+                else:
+                    log = f.read()
+        except FileNotFoundError:
+            log = ""
+        return web.json_response({"log": log})
 
     @_server.routes.post("/comfymodal/deploy")
     async def modal_deploy_trigger(request: web.Request) -> web.Response:
@@ -568,6 +737,10 @@ if _server:
     async def modal_list_models(request: web.Request) -> web.Response:
         try:
             result = await list_models()
+            try:
+                _sync_model_placeholders(result)
+            except Exception as e:
+                print(f"[comfyui-modal] Warning: placeholder sync failed: {e}")
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=503)

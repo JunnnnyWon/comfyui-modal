@@ -5,3 +5,4 @@ __pycache__/
 .env
 .hf_token
 .custom_nodes.json
+.deploy_log

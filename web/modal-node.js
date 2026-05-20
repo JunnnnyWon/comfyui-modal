@@ -16,16 +16,25 @@ app.registerExtension({
     log("Extension loaded. Patching fetchApi...");
 
     function stripModalPrefix(obj) {
+      // Fast path: skip cloning if no modal- prefixes exist anywhere
+      if (typeof obj === "object" && obj !== null) {
+        const serialized = JSON.stringify(obj);
+        if (!serialized.includes("modal-")) {
+          return obj;
+        }
+      }
+      return _stripModalPrefixRecursive(obj);
+    }
+
+    function _stripModalPrefixRecursive(obj) {
       if (typeof obj === "string") {
         return obj.startsWith("modal-") ? obj.slice(6) : obj;
       }
-      if (Array.isArray(obj)) return obj.map(stripModalPrefix);
-      if (obj && typeof obj === "object") {
-        const out = {};
-        for (const [k, v] of Object.entries(obj)) out[k] = stripModalPrefix(v);
-        return out;
-      }
-      return obj;
+      if (typeof obj !== "object" || obj === null) return obj;
+      if (Array.isArray(obj)) return obj.map(_stripModalPrefixRecursive);
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = _stripModalPrefixRecursive(v);
+      return out;
     }
 
     _originalFetchApi = api.fetchApi.bind(api);

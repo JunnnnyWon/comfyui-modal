@@ -57,6 +57,7 @@ let statusBannerTextEl = null;
 let _deployPollTimer = null;
 let _deployState = "idle";
 let _hasChanges = false;
+let _deployWarning = "";
 
 const STATUS_STYLE = {
   [STATUS.UNKNOWN]:    { color: "#888",    label: "Unknown" },
@@ -87,6 +88,10 @@ function updateStatusBanner() {
     text = "Deploy needed";
     bg = "#3d2e00";
     color = "#f5a623";
+  } else if (_deployState === "ready" && _deployWarning) {
+    text = _deployWarning;
+    bg = "#3d2e00";
+    color = "#f5a623";
   } else if (currentStatus === STATUS.ONLINE) {
     text = "Ready to generate";
     bg = "#1a3a1a";
@@ -113,6 +118,117 @@ function setDeployBanner(state, message) {
     statusBannerTextEl.textContent = "Error: " + (message || "Unknown error");
   }
   updateStatusBanner();
+  updateDeployLogButton();
+}
+
+function updateDeployLogButton() {
+  if (!statusBannerEl) return;
+  const existing = statusBannerEl.querySelector("[data-deploy-log-btn]");
+  if (_deployState === "error") {
+    if (!existing) {
+      const btn = document.createElement("button");
+      btn.setAttribute("data-deploy-log-btn", "1");
+      btn.textContent = "View Full Log";
+      btn.style.cssText = `
+        background: transparent; border: 1px solid #e05050; color: #e05050;
+        padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
+        margin-left: 8px; font-weight: 600;
+      `;
+      btn.onclick = () => showDeployLogOverlay();
+      statusBannerEl.appendChild(btn);
+    }
+  } else {
+    if (existing) existing.remove();
+  }
+}
+
+async function showDeployLogOverlay() {
+  // Remove existing overlay if present
+  const prev = document.getElementById("deploy-log-overlay");
+  if (prev) prev.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "deploy-log-overlay";
+  overlay.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.7); z-index: 99999;
+    display: flex; align-items: center; justify-content: center;
+  `;
+
+  const modal = document.createElement("div");
+  modal.style.cssText = `
+    background: #1e1e2e; border: 1px solid #444; border-radius: 8px;
+    width: 80%; max-width: 800px; max-height: 80vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  `;
+
+  const header = document.createElement("div");
+  header.style.cssText = `
+    display: flex; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid #333; flex-shrink: 0;
+  `;
+
+  const title = document.createElement("span");
+  title.style.cssText = "font-weight: 600; font-size: 14px; color: #ddd; flex: 1;";
+  title.textContent = "Deploy Log";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "\u2715";
+  closeBtn.style.cssText = `
+    background: transparent; border: 1px solid #555; color: #aaa;
+    width: 28px; height: 28px; border-radius: 4px; cursor: pointer;
+    font-size: 14px; display: flex; align-items: center; justify-content: center;
+  `;
+
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+
+  const body = document.createElement("div");
+  body.style.cssText = "flex: 1; overflow-y: auto; padding: 16px; min-height: 0;";
+
+  const pre = document.createElement("pre");
+  pre.style.cssText = `
+    margin: 0; font-size: 11px; color: #ccc; white-space: pre-wrap;
+    word-break: break-all; font-family: monospace; line-height: 1.5;
+  `;
+  pre.textContent = "Loading...";
+  body.appendChild(pre);
+
+  modal.appendChild(header);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  // Centralized close function to prevent listener leaks
+  function close() {
+    overlay.remove();
+    document.removeEventListener("keydown", escHandler);
+  }
+
+  // Close on overlay background click
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  // Close on Escape key
+  const escHandler = (e) => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", escHandler);
+
+  // Close button
+  closeBtn.onclick = () => close();
+
+  // Fetch the log
+  try {
+    const resp = await api.fetchApi(`${MODAL_PREFIX}/deploy/log`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    pre.textContent = data.log || "(No log content available)";
+  } catch (e) {
+    pre.textContent = `Error loading log: ${e.message}`;
+    pre.style.color = "#e05050";
+  }
 }
 
 async function pollDeployStatus() {
@@ -125,6 +241,7 @@ async function pollDeployStatus() {
       _deployPollTimer = setTimeout(pollDeployStatus, 3000);
     } else if (data.state === "ready") {
       _hasChanges = false;
+      _deployWarning = data.warning ? data.message : "";
       updateStatusBanner();
     }
   } catch {}
