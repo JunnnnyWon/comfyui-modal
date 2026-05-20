@@ -280,7 +280,8 @@ def _sync_model_placeholders(modal_models: dict):
             dest = os.path.join(local_dir, placeholder_name)
             try:
                 if not os.path.exists(dest):
-                    open(dest, "wb").close()
+                    with open(dest, "wb"):
+                        pass
             except Exception as e:
                 print(f"[comfyui-modal] Warning: could not create placeholder {dest}: {e}")
 
