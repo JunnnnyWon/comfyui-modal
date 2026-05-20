@@ -22,6 +22,22 @@ CUSTOM_NODES = [
 
 SUPPORTED_GPUS = ["a10g", "a100", "t4"]
 
+import os as _os
+
+_CUSTOM_NODES_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".custom_nodes.json")
+
+
+def _load_custom_node_urls():
+    try:
+        with open(_CUSTOM_NODES_FILE, "r") as f:
+            import json as _json
+            return _json.load(f)
+    except (FileNotFoundError, Exception):
+        return []
+
+
+CUSTOM_NODE_URLS = _load_custom_node_urls()
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install(
@@ -44,6 +60,38 @@ image = (
     )
     .run_commands("rm -rf /root/comfy/ComfyUI/models && ln -s /root/models /root/comfy/ComfyUI/models")
 )
+
+if CUSTOM_NODE_URLS:
+    _install_commands = []
+    for _url in CUSTOM_NODE_URLS:
+        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
+        _install_commands.append(
+            f"comfy node install {_url} || "
+            f"(git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
+            f"cd /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
+            f"([ -f requirements.txt ] && pip install -r requirements.txt || true))"
+        )
+    image = image.run_commands(*_install_commands, gpu="a10g")
+
+    # Write install results for each custom node URL
+    _results_script = "import json, os, subprocess\\n"
+    _results_script += "results = []\\n"
+    for _url in CUSTOM_NODE_URLS:
+        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
+        _results_script += (
+            f"path = '/root/comfy/ComfyUI/custom_nodes/{_repo_name}'\\n"
+            f"if os.path.isdir(path):\\n"
+            f"    results.append({{'url': '{_url}', 'name': '{_repo_name}', 'status': 'ok', 'error': ''}})\\n"
+            f"else:\\n"
+            f"    results.append({{'url': '{_url}', 'name': '{_repo_name}', 'status': 'error', 'error': 'Directory not found after install'}})\\n"
+        )
+    _results_script += "with open('/root/.custom_node_install_results.json', 'w') as f:\\n"
+    _results_script += "    json.dump(results, f)\\n"
+    _results_script += "print(json.dumps(results, indent=2))\\n"
+    image = image.run_commands(
+        f"python3 -c \"{_results_script}\"",
+        gpu="a10g",
+    )
 
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -302,6 +350,15 @@ class ComfyAPI:
         return {"status": "ok"}
 
     @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
+
+    @modal.method()
     def list_models(self):
         import os
         # Standalone folders shown as their own sections
@@ -475,6 +532,15 @@ class ComfyAPI_A100:
         return {"status": "ok"}
 
     @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
+
+    @modal.method()
     def list_models(self):
         import os
         # Standalone folders shown as their own sections
@@ -646,6 +712,15 @@ class ComfyAPI_T4:
     @modal.method()
     def health(self):
         return {"status": "ok"}
+
+    @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
 
     @modal.method()
     def list_models(self):
