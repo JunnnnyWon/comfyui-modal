@@ -38,11 +38,20 @@ def _ensure_modal():
     except ImportError:
         pass
     print("[comfyui-modal] 'modal' package not found — installing...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "modal"],
-        check=True,
-    )
-    print("[comfyui-modal] 'modal' installed successfully.")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "modal"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("[comfyui-modal] 'modal' installed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"[comfyui-modal] ERROR: Failed to install 'modal' package: {e.stderr}")
+        print("[comfyui-modal] Please install manually: pip install modal")
+    except Exception as e:
+        print(f"[comfyui-modal] ERROR: Unexpected error installing 'modal': {e}")
+        print("[comfyui-modal] Please install manually: pip install modal")
 
 _ensure_modal()
 
@@ -124,7 +133,7 @@ def _run_deploy_background():
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=600,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         if result.returncode == 0:
@@ -141,7 +150,7 @@ def _run_deploy_background():
             _deploy_status = {"state": "error", "message": msg}
             print(f"[comfyui-modal] {msg}")
     except subprocess.TimeoutExpired:
-        _deploy_status = {"state": "error", "message": "Deploy timed out (5 min)"}
+        _deploy_status = {"state": "error", "message": "Deploy timed out (10 min)"}
         print(f"[comfyui-modal] Deploy timed out")
     except Exception as e:
         _deploy_status = {"state": "error", "message": str(e)}
@@ -226,6 +235,7 @@ def _write_modal_toml(token_id: str, token_secret: str):
 _queue: asyncio.Queue = asyncio.Queue()
 _queue_worker_started = False
 _item_counter = 0
+_counter_lock = asyncio.Lock()
 
 
 def _send(sid: str, event: str, data: dict):
@@ -287,9 +297,10 @@ def _collect_input_images(workflow: dict) -> dict:
     for node in workflow.values():
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") != "LoadImage":
+        class_type = node.get("class_type", "")
+        if not class_type.startswith("LoadImage"):
             continue
-        filename = node.get("inputs", {}).get("image", "")
+        filename = node.get("inputs", {}).get("image", "") or node.get("inputs", {}).get("mask", "")
         if not filename or filename in images:
             continue
         for d in search_dirs:
@@ -431,10 +442,11 @@ if _server:
         prompt_id = str(uuid.uuid4())
 
         import time
-        _item_counter += 1
-        item_id = _item_counter
-        extra_data = {"client_id": client_id, "create_time": int(time.time() * 1000)}
-        item = (_item_counter, prompt_id, workflow, extra_data, list(workflow.keys()), {})
+        async with _counter_lock:
+            _item_counter += 1
+            item_id = _item_counter
+            extra_data = {"client_id": client_id, "create_time": int(time.time() * 1000)}
+            item = (_item_counter, prompt_id, workflow, extra_data, list(workflow.keys()), {})
 
         pq = _pq()
         if pq:
