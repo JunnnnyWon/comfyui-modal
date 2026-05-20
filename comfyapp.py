@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import uuid
+import re
 import modal
 
 # Bump this version whenever comfyapp.py changes.
@@ -21,6 +22,29 @@ CUSTOM_NODES = [
 ]
 
 SUPPORTED_GPUS = ["a10g", "a100", "t4"]
+
+import os as _os
+
+_CUSTOM_NODES_FILE = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".custom_nodes.json")
+
+
+def _load_custom_node_urls():
+    try:
+        with open(_CUSTOM_NODES_FILE, "r") as f:
+            import json as _json
+            return _json.load(f)
+    except (FileNotFoundError, Exception):
+        return []
+
+
+CUSTOM_NODE_URLS = _load_custom_node_urls()
+
+# Validate URLs to prevent shell injection - only allow safe characters
+_SAFE_URL_RE = re.compile(r'^https?://[a-zA-Z0-9._\-/~@:]+$')
+CUSTOM_NODE_URLS = [
+    u for u in CUSTOM_NODE_URLS
+    if _SAFE_URL_RE.match(u) or not print(f"[comfyui-modal] WARNING: skipping unsafe custom node URL: {u}")
+]
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -44,6 +68,44 @@ image = (
     )
     .run_commands("rm -rf /root/comfy/ComfyUI/models && ln -s /root/models /root/comfy/ComfyUI/models")
 )
+
+if CUSTOM_NODE_URLS:
+    _install_commands = []
+    for _url in CUSTOM_NODE_URLS:
+        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
+        _install_commands.append(
+            f"comfy node install {_url} || "
+            f"(git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
+            f"cd /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
+            f"([ -f requirements.txt ] && pip install -r requirements.txt || true))"
+        )
+    image = image.run_commands(*_install_commands, gpu="a10g")
+
+    # Write install results for each custom node URL by checking which directories exist
+    _node_entries = []
+    for _url in CUSTOM_NODE_URLS:
+        _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
+        _node_entries.append({"url": _url, "name": _repo_name})
+    _entries_json = json.dumps(_node_entries)
+    # Write a small Python script that checks which custom nodes were installed
+    _script_content = (
+        "import json, os\n"
+        f"entries = {_entries_json}\n"
+        "results = []\n"
+        "for e in entries:\n"
+        "    path = '/root/comfy/ComfyUI/custom_nodes/' + e['name']\n"
+        "    if os.path.isdir(path):\n"
+        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'ok', 'error': ''})\n"
+        "    else:\n"
+        "        results.append({'url': e['url'], 'name': e['name'], 'status': 'error', 'error': 'Directory not found after install'})\n"
+        "with open('/root/.custom_node_install_results.json', 'w') as f:\n"
+        "    json.dump(results, f)\n"
+        "print(json.dumps(results, indent=2))\n"
+    )
+    # Use a heredoc-style approach: write script to file then execute
+    _escaped_content = _script_content.replace("'", "'\\''")
+    _write_and_run = f"printf '%s' '{_escaped_content}' > /tmp/_check_cn.py && python3 /tmp/_check_cn.py"
+    image = image.run_commands(_write_and_run, gpu="a10g")
 
 download_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -302,6 +364,15 @@ class ComfyAPI:
         return {"status": "ok"}
 
     @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
+
+    @modal.method()
     def list_models(self):
         import os
         # Standalone folders shown as their own sections
@@ -475,6 +546,15 @@ class ComfyAPI_A100:
         return {"status": "ok"}
 
     @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
+
+    @modal.method()
     def list_models(self):
         import os
         # Standalone folders shown as their own sections
@@ -646,6 +726,15 @@ class ComfyAPI_T4:
     @modal.method()
     def health(self):
         return {"status": "ok"}
+
+    @modal.method()
+    def custom_node_status(self):
+        import os
+        results_file = "/root/.custom_node_install_results.json"
+        if os.path.isfile(results_file):
+            with open(results_file, "r") as f:
+                return json.loads(f.read())
+        return []
 
     @modal.method()
     def list_models(self):
