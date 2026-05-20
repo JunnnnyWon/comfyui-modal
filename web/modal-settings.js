@@ -31,9 +31,9 @@ const DOWNLOAD_FOLDERS = [
 ];
 
 const GPU_OPTIONS = [
-  { value: "a10g",  label: "A10G  (24 GB) — recommended" },
-  { value: "a100",  label: "A100  (40 GB)" },
-  { value: "t4",    label: "T4    (16 GB) — budget" },
+  { value: "a10g",  label: "A10G - 24GB VRAM (recommended, ~$0.60/hr)" },
+  { value: "a100",  label: "A100 - 40GB VRAM (large models, ~$1.10/hr)" },
+  { value: "t4",    label: "T4 - 16GB VRAM (budget, ~$0.30/hr)" },
 ];
 
 const STORAGE_KEY_GPU    = "comfymodal_gpu";
@@ -51,36 +51,68 @@ let currentStatus = STATUS.UNKNOWN;
 let dotEl = null;
 let statusEl = null;
 let modelListEl = null;
-let deployBannerEl = null;
-let deployBannerTextEl = null;
+let modelsCollapsibleRef = null;
+let statusBannerEl = null;
+let statusBannerTextEl = null;
 let _deployPollTimer = null;
+let _deployState = "idle";
+let _hasChanges = false;
 
 const STATUS_STYLE = {
-  [STATUS.UNKNOWN]:    { color: "#888",    label: "Not checked" },
+  [STATUS.UNKNOWN]:    { color: "#888",    label: "Unknown" },
   [STATUS.CHECKING]:   { color: "#f5a623", label: "Checking..." },
-  [STATUS.ONLINE]:     { color: "#7ed321", label: "Online (warm)" },
-  [STATUS.OFFLINE]:    { color: "#888",    label: "Offline (cold)" },
+  [STATUS.ONLINE]:     { color: "#7ed321", label: "Ready (container running)" },
+  [STATUS.OFFLINE]:    { color: "#888",    label: "Sleeping (will wake on use)" },
   [STATUS.GENERATING]: { color: "#4a90e2", label: "Generating..." },
 };
 
-const DEPLOY_STATE_STYLE = {
-  idle:      { color: "#888",    text: "" },
-  deploying: { color: "#f5a623", text: "⏳ Deploying to Modal..." },
-  ready:     { color: "#7ed321", text: "" },
-  error:     { color: "#e05050", text: "" },
-};
+// --- Status Banner Logic ---
+function updateStatusBanner() {
+  if (!statusBannerEl || !statusBannerTextEl) return;
+  let text = "";
+  let bg = "#2a2a2a";
+  let color = "#aaa";
+  let animation = "";
+
+  if (_deployState === "deploying") {
+    text = "Deploying...";
+    bg = "#3d2e00";
+    color = "#f5a623";
+    animation = "statusPulse 1.5s ease-in-out infinite";
+  } else if (_deployState === "error") {
+    text = "Error";
+    bg = "#3d1010";
+    color = "#e05050";
+  } else if (_hasChanges) {
+    text = "Deploy needed";
+    bg = "#3d2e00";
+    color = "#f5a623";
+  } else if (currentStatus === STATUS.ONLINE) {
+    text = "Ready to generate";
+    bg = "#1a3a1a";
+    color = "#7ed321";
+  } else if (currentStatus === STATUS.OFFLINE) {
+    text = "Sleeping";
+    bg = "#2a2a2a";
+    color = "#888";
+  } else {
+    text = "Not deployed";
+    bg = "#2a2a2a";
+    color = "#888";
+  }
+
+  statusBannerEl.style.background = bg;
+  statusBannerEl.style.color = color;
+  statusBannerEl.style.animation = animation;
+  statusBannerTextEl.textContent = text;
+}
 
 function setDeployBanner(state, message) {
-  if (!deployBannerEl || !deployBannerTextEl) return;
-  const style = DEPLOY_STATE_STYLE[state] || DEPLOY_STATE_STYLE.idle;
-  const text = state === "error" ? `⚠ ${message}` : style.text;
-  if (!text) {
-    deployBannerEl.style.display = "none";
-    return;
+  _deployState = state;
+  if (state === "error" && statusBannerTextEl) {
+    statusBannerTextEl.textContent = "Error: " + (message || "Unknown error");
   }
-  deployBannerEl.style.display = "block";
-  deployBannerEl.style.color = style.color;
-  deployBannerTextEl.textContent = text;
+  updateStatusBanner();
 }
 
 async function pollDeployStatus() {
@@ -91,6 +123,9 @@ async function pollDeployStatus() {
     setDeployBanner(data.state, data.message);
     if (data.state === "deploying") {
       _deployPollTimer = setTimeout(pollDeployStatus, 3000);
+    } else if (data.state === "ready") {
+      _hasChanges = false;
+      updateStatusBanner();
     }
   } catch {}
 }
@@ -102,10 +137,15 @@ function startDeployPoll() {
 
 function setStatus(s) {
   currentStatus = s;
-  if (!dotEl || !statusEl) return;
-  const { color, label } = STATUS_STYLE[s] || STATUS_STYLE[STATUS.UNKNOWN];
-  dotEl.style.background = color;
-  statusEl.textContent = label;
+  if (dotEl) {
+    const { color } = STATUS_STYLE[s] || STATUS_STYLE[STATUS.UNKNOWN];
+    dotEl.style.background = color;
+  }
+  if (statusEl) {
+    const { label } = STATUS_STYLE[s] || STATUS_STYLE[STATUS.UNKNOWN];
+    statusEl.textContent = label;
+  }
+  updateStatusBanner();
 }
 
 async function checkHealth(ping = false) {
@@ -122,7 +162,7 @@ async function checkHealth(ping = false) {
       const data = await resp.json().catch(() => ({}));
       if (data.status === "deploying") {
         setStatus(STATUS.CHECKING);
-        statusEl.textContent = "Deploying...";
+        if (statusEl) statusEl.textContent = "Deploying...";
       } else {
         setStatus(STATUS.OFFLINE);
       }
@@ -138,26 +178,150 @@ api.addEventListener("executing", (e) => {
 });
 api.addEventListener("execution_error", () => setStatus(STATUS.OFFLINE));
 
+// --- Toast notification ---
+function showToast(message, type) {
+  const toast = document.createElement("div");
+  toast.setAttribute("role", "alert");
+  toast.setAttribute("aria-live", "polite");
+  const bgMap = { success: "#1a3a1a", error: "#3d1010", info: "#1a2a3a" };
+  const colorMap = { success: "#7ed321", error: "#e05050", info: "#6a9fd8" };
+  toast.style.cssText = `
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: ${bgMap[type] || bgMap.info}; color: ${colorMap[type] || colorMap.info};
+    padding: 8px 16px; border-radius: 6px; font-size: 12px;
+    z-index: 10000; pointer-events: none; opacity: 1;
+    transition: opacity 0.5s ease; border: 1px solid ${colorMap[type] || colorMap.info};
+  `;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = "0"; }, 1500);
+  setTimeout(() => { toast.remove(); }, 2100);
+}
+
+// --- Utility ---
 function fmtSize(bytes) {
   if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(2) + " GB";
   if (bytes >= 1024 ** 2) return (bytes / 1024 ** 2).toFixed(1) + " MB";
   return (bytes / 1024).toFixed(0) + " KB";
 }
 
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// --- Collapsible section helper ---
+function createCollapsibleSection(title, opts) {
+  const { defaultOpen, badge, id } = opts || {};
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = "border-radius: 6px; background: #1e1e2e; overflow: hidden; flex-shrink: 0;";
+
+  const header = document.createElement("div");
+  header.style.cssText = `
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    cursor: pointer; user-select: none;
+  `;
+
+  const chevron = document.createElement("span");
+  chevron.style.cssText = "font-size: 10px; color: #888; transition: transform 0.2s ease; flex-shrink: 0;";
+  chevron.textContent = "\u25B6";
+
+  const titleEl = document.createElement("span");
+  titleEl.style.cssText = "font-weight: 600; font-size: 13px; flex: 1;";
+  titleEl.textContent = title;
+
+  const badgeEl = document.createElement("span");
+  badgeEl.style.cssText = "font-size: 10px; background: #3a3a4a; color: #aaa; padding: 1px 6px; border-radius: 8px; flex-shrink: 0;";
+  badgeEl.textContent = badge != null ? badge : "0";
+
+  header.appendChild(chevron);
+  header.appendChild(titleEl);
+  header.appendChild(badgeEl);
+
+  const content = document.createElement("div");
+  content.style.cssText = "max-height: 0; overflow: hidden; transition: max-height 0.3s ease; padding: 0 10px;";
+
+  let isOpen = !!defaultOpen;
+
+  function toggle() {
+    isOpen = !isOpen;
+    if (isOpen) {
+      content.style.maxHeight = content.scrollHeight + 200 + "px";
+      content.style.paddingBottom = "10px";
+      chevron.style.transform = "rotate(90deg)";
+    } else {
+      content.style.maxHeight = "0";
+      content.style.paddingBottom = "0";
+      chevron.style.transform = "rotate(0deg)";
+    }
+  }
+
+  function open() {
+    if (!isOpen) toggle();
+  }
+
+  function updateBadge(val) {
+    badgeEl.textContent = String(val);
+  }
+
+  function refreshHeight() {
+    if (isOpen) {
+      content.style.maxHeight = content.scrollHeight + 200 + "px";
+    }
+  }
+
+  if (isOpen) {
+    // start open
+    setTimeout(() => {
+      content.style.maxHeight = content.scrollHeight + 200 + "px";
+      content.style.paddingBottom = "10px";
+      chevron.style.transform = "rotate(90deg)";
+    }, 0);
+  }
+
+  header.onclick = toggle;
+
+  wrapper.appendChild(header);
+  wrapper.appendChild(content);
+
+  return { wrapper, content, header, updateBadge, open, toggle, refreshHeight };
+}
+
+// --- Models loading ---
 async function loadModels() {
   if (!modelListEl) return;
   modelListEl.innerHTML = `<div style="color:#888;padding:8px 0;font-size:12px;">Loading...</div>`;
   try {
     const resp = await api.fetchApi(`${MODAL_PREFIX}/models`);
     if (resp.status === 503) {
-      modelListEl.innerHTML = `<div style="color:#888;font-size:12px;line-height:1.6;">Modal app not deployed yet.<br>Click <b>↑ Deploy</b> above to get started.</div>`;
+      modelListEl.innerHTML = `<div style="color:#888;font-size:12px;line-height:1.6;">Modal app not deployed yet.<br>Click <b>Deploy to Cloud</b> above to get started.</div>`;
+      if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
       return;
     }
     if (!resp.ok) throw new Error(resp.status);
     const data = await resp.json();
     renderModelList(data);
   } catch (e) {
-    modelListEl.innerHTML = `<div style="color:#e05;font-size:12px;">Error: ${e.message}</div>`;
+    modelListEl.innerHTML = "";
+    const errDiv = document.createElement("div");
+    errDiv.style.cssText = "color:#e05;font-size:12px;";
+    errDiv.textContent = "Error loading models";
+    const details = document.createElement("details");
+    details.style.cssText = "font-size:11px;color:#888;margin-top:4px;";
+    const summary = document.createElement("summary");
+    summary.style.cssText = "cursor:pointer;color:#aaa;";
+    summary.textContent = "Show details";
+    const msgP = document.createElement("p");
+    msgP.style.cssText = "margin:4px 0 0;font-family:monospace;";
+    msgP.textContent = e.message;
+    details.appendChild(summary);
+    details.appendChild(msgP);
+    modelListEl.appendChild(errDiv);
+    modelListEl.appendChild(details);
+    if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
   }
 }
 
@@ -204,8 +368,52 @@ function renderModelList(data) {
         row.appendChild(size);
       }
 
+      // Inject button - "Create local reference"
+      const injectBtn = document.createElement("button");
+      injectBtn.title = alreadyInjected
+        ? "Already referenced locally"
+        : "Create local reference - lets ComfyUI see this cloud model in node dropdowns";
+      injectBtn.textContent = alreadyInjected ? "Referenced" : "\u2B07";
+      injectBtn.style.cssText = `
+        background: transparent; border: 1px solid ${alreadyInjected ? "#3a5" : "#557"}; color: ${alreadyInjected ? "#3a3" : "#99b"};
+        padding: 0 6px; height: 20px; border-radius: 3px; cursor: ${alreadyInjected ? "default" : "pointer"};
+        font-size: ${alreadyInjected ? "10px" : "12px"}; flex-shrink: 0; line-height: 1;
+      `;
+      if (!alreadyInjected) {
+        injectBtn.onclick = async () => {
+          injectBtn.disabled = true;
+          injectBtn.textContent = "\u2026";
+          try {
+            const r = await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ folder: file.folder ?? folder, filename: file.name }),
+            });
+            const result = await r.json();
+            if (result.status === "ok") {
+              injectBtn.textContent = "Referenced";
+              injectBtn.style.color = "#3a3";
+              injectBtn.style.borderColor = "#3a5";
+              injectBtn.style.fontSize = "10px";
+              injectBtn.title = `Referenced as ${result.name}`;
+            } else {
+              throw new Error(result.message);
+            }
+          } catch (e) {
+            injectBtn.textContent = "!";
+            injectBtn.style.color = "#e05";
+            injectBtn.title = `Error: ${e.message}`;
+            setTimeout(() => {
+              injectBtn.disabled = false;
+              injectBtn.textContent = "\u2B07";
+              injectBtn.style.color = "#99b";
+            }, 2000);
+          }
+        };
+      }
+
       const delBtn = document.createElement("button");
-      delBtn.textContent = "✕";
+      delBtn.textContent = "\u2715";
       delBtn.title = `Delete ${file.name}`;
       delBtn.style.cssText = `
         background: transparent; border: 1px solid #555; color: #e05;
@@ -216,66 +424,25 @@ function renderModelList(data) {
       delBtn.onclick = async () => {
         if (!confirm(`Delete ${file.folder ?? folder}/${file.name}?`)) return;
         delBtn.disabled = true;
-        delBtn.textContent = "…";
+        delBtn.textContent = "\u2026";
         try {
           const r = await api.fetchApi(`${MODAL_PREFIX}/models/${file.folder ?? folder}/${encodeURIComponent(file.name)}`, { method: "DELETE" });
           const result = await r.json();
           if (result.status === "ok") {
             row.remove();
+            showToast("Model deleted", "success");
           } else {
             alert(`Delete failed: ${result.message}`);
             delBtn.disabled = false;
-            delBtn.textContent = "✕";
+            delBtn.textContent = "\u2715";
           }
         } catch (e) {
           alert(`Error: ${e.message}`);
           delBtn.disabled = false;
-          delBtn.textContent = "✕";
+          delBtn.textContent = "\u2715";
         }
       };
 
-      const injectBtn = document.createElement("button");
-      injectBtn.title = alreadyInjected ? "Already injected as local placeholder" : `Inject as modal-${file.name}`;
-      injectBtn.textContent = alreadyInjected ? "✓" : "⬇L";
-      injectBtn.style.cssText = `
-        background: transparent; border: 1px solid ${alreadyInjected ? "#3a3" : "#557"}; color: ${alreadyInjected ? "#3a3" : "#99b"};
-        width: 28px; height: 20px; border-radius: 3px; cursor: ${alreadyInjected ? "default" : "pointer"};
-        font-size: 10px; flex-shrink: 0; line-height: 1;
-      `;
-      if (!alreadyInjected) {
-        injectBtn.onclick = async () => {
-          injectBtn.disabled = true;
-          injectBtn.textContent = "…";
-          try {
-            const r = await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ folder: file.folder ?? folder, filename: file.name }),
-            });
-            const result = await r.json();
-            if (result.status === "ok") {
-              injectBtn.textContent = "✓";
-              injectBtn.style.color = "#3a3";
-              injectBtn.style.borderColor = "#3a3";
-              injectBtn.title = `Injected as ${result.name}`;
-            } else {
-              throw new Error(result.message);
-            }
-          } catch (e) {
-            injectBtn.textContent = "!";
-            injectBtn.style.color = "#e05";
-            injectBtn.title = `Error: ${e.message}`;
-            setTimeout(() => {
-              injectBtn.disabled = false;
-              injectBtn.textContent = "⬇L";
-              injectBtn.style.color = "#99b";
-            }, 2000);
-          }
-        };
-      }
-
-      row.appendChild(name);
-      row.appendChild(size);
       row.appendChild(injectBtn);
       row.appendChild(delBtn);
       section.appendChild(row);
@@ -287,8 +454,10 @@ function renderModelList(data) {
   if (!hasAny) {
     modelListEl.innerHTML = `<div style="color:#666;font-size:12px;padding:8px 0;">No models in volume.</div>`;
   }
+  if (modelsCollapsibleRef) modelsCollapsibleRef.refreshHeight();
 }
 
+// --- Download queue ---
 const downloadQueue = [];
 let queueListEl = null;
 let downloadAllBtn = null;
@@ -297,7 +466,7 @@ let batchStatusEl = null;
 function renderQueueItem(entry) {
   const row = document.createElement("div");
   row.dataset.id = entry.id;
-  row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#1e1e2e; margin-bottom:3px;";
+  row.style.cssText = "display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; background:#2a2a2a; margin-bottom:3px;";
 
   const info = document.createElement("div");
   info.style.cssText = "flex:1; min-width:0;";
@@ -316,7 +485,7 @@ function renderQueueItem(entry) {
   info.appendChild(statusLine);
 
   const removeBtn = document.createElement("button");
-  removeBtn.textContent = "✕";
+  removeBtn.textContent = "\u2715";
   removeBtn.style.cssText = `
     background: transparent; border: 1px solid #555; color: #888;
     width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
@@ -344,17 +513,18 @@ function syncDownloadAllBtn() {
   const queued = downloadQueue.filter(e => e.state === "queued").length;
   downloadAllBtn.disabled = queued === 0;
   downloadAllBtn.textContent = queued > 1
-    ? `⬇ Download All (${queued})`
-    : "⬇ Download";
+    ? `\u2B07 Download All (${queued})`
+    : "\u2B07 Download Batch";
 }
 
+// --- Auth Panel ---
 function buildAuthPanel(onConnected) {
   const wrap = document.createElement("div");
   wrap.style.cssText = "display:flex; flex-direction:column; gap:12px; padding:14px 16px; height:100%; box-sizing:border-box;";
 
   const title = document.createElement("div");
   title.style.cssText = "font-weight:600; font-size:14px;";
-  title.textContent = "☁ Modal GPU";
+  title.textContent = "\u2601 Modal GPU";
   wrap.appendChild(title);
 
   const desc = document.createElement("div");
@@ -366,7 +536,7 @@ function buildAuthPanel(onConnected) {
   steps.style.cssText = "font-size:12px; color:#aaa; line-height:1.8; padding-left:18px; margin:0;";
   steps.innerHTML = `
     <li>Create a free account at <a href="https://modal.com" target="_blank" style="color:#6a9fd8;">modal.com</a></li>
-    <li>Go to <a href="https://modal.com/settings/tokens" target="_blank" style="color:#6a9fd8;">Settings → Tokens</a></li>
+    <li>Go to <a href="https://modal.com/settings/tokens" target="_blank" style="color:#6a9fd8;">Settings \u2192 Tokens</a></li>
     <li>Create a new token and paste below</li>
   `;
   wrap.appendChild(steps);
@@ -384,7 +554,7 @@ function buildAuthPanel(onConnected) {
 
   const tokenSecretInput = document.createElement("input");
   tokenSecretInput.type = "password";
-  tokenSecretInput.placeholder = "Token Secret  (as-...)  — auto-filled if pasted above";
+  tokenSecretInput.placeholder = "Token Secret  (as-...)  \u2014 auto-filled if pasted above";
   tokenSecretInput.style.cssText = inputStyle();
   wrap.appendChild(tokenSecretInput);
 
@@ -403,8 +573,6 @@ function buildAuthPanel(onConnected) {
     const pasted = (e.clipboardData || window.clipboardData).getData("text");
     if (tryParseCommand(pasted)) e.preventDefault();
   });
-
-  const tokenIdInput = { get value() { return pasteInput.value; } };
 
   const errorEl = document.createElement("div");
   errorEl.style.cssText = "font-size:11px; color:#e05050; min-height:14px;";
@@ -448,99 +616,157 @@ function buildAuthPanel(onConnected) {
   return wrap;
 }
 
+// --- Main Panel ---
 function buildPanel() {
   const panel = document.createElement("div");
   panel.style.cssText = `
-    padding: 14px 16px;
     font-size: 13px;
     color: var(--fg-color, #ddd);
     height: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    gap: 10px;
     overflow: hidden;
   `;
 
+  // Inject keyframe animation for status pulse
+  if (!document.getElementById("modal-settings-styles")) {
+    const styleTag = document.createElement("style");
+    styleTag.id = "modal-settings-styles";
+    styleTag.textContent = `
+      @keyframes statusPulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+    `;
+    document.head.appendChild(styleTag);
+  }
+
+  // === STICKY HEADER AREA ===
+  const stickyTop = document.createElement("div");
+  stickyTop.style.cssText = "flex-shrink: 0; padding: 14px 16px 0; display: flex; flex-direction: column; gap: 10px;";
+
+  // -- Status Banner --
+  statusBannerEl = document.createElement("div");
+  statusBannerEl.style.cssText = `
+    padding: 8px 12px; border-radius: 6px; background: #2a2a2a;
+    font-size: 12px; font-weight: 600; text-align: center; color: #888;
+  `;
+  statusBannerTextEl = document.createElement("span");
+  statusBannerTextEl.textContent = "Not deployed";
+  statusBannerEl.appendChild(statusBannerTextEl);
+  stickyTop.appendChild(statusBannerEl);
+
+  // -- Header Row: Title + Gear --
   const headerRow = document.createElement("div");
-  headerRow.style.cssText = "display:flex; align-items:center; gap:8px; flex-shrink:0;";
+  headerRow.style.cssText = "display:flex; align-items:center; gap:8px;";
 
   const title = document.createElement("span");
   title.style.cssText = "font-weight:600; font-size:14px; letter-spacing:0.03em; flex:1;";
-  title.textContent = "☁ Modal GPU";
+  title.textContent = "\u2601 Modal GPU";
 
-  const toggleLabel = document.createElement("label");
-  toggleLabel.style.cssText = "display:flex; align-items:center; gap:5px; cursor:pointer; flex-shrink:0;";
-  toggleLabel.title = "Toggle Modal GPU routing. Off = use local ComfyUI.";
+  const gearBtn = document.createElement("button");
+  gearBtn.textContent = "\u2699";
+  gearBtn.title = "Settings";
+  gearBtn.style.cssText = `
+    background: transparent; border: 1px solid #555; color: #aaa;
+    width: 28px; height: 28px; border-radius: 4px; cursor: pointer;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  `;
 
-  const toggleInput = document.createElement("input");
-  toggleInput.type = "checkbox";
-  toggleInput.style.cssText = "cursor:pointer; width:14px; height:14px;";
+  headerRow.appendChild(title);
+  headerRow.appendChild(gearBtn);
+  stickyTop.appendChild(headerRow);
 
-  const savedEnabled = localStorage.getItem(STORAGE_KEY_ENABLED);
-  toggleInput.checked = savedEnabled === null ? true : savedEnabled === "true";
-
-  const toggleText = document.createElement("span");
-  toggleText.style.cssText = "font-size:11px; color:#aaa;";
-  toggleText.textContent = toggleInput.checked ? "Modal ON" : "Local";
-
-  toggleInput.addEventListener("change", () => {
-    const enabled = toggleInput.checked;
-    localStorage.setItem(STORAGE_KEY_ENABLED, String(enabled));
-    toggleText.textContent = enabled ? "Modal ON" : "Local";
-    updateModalSections(enabled);
-    window._comfyModalEnabled = enabled;
-  });
-
-  toggleLabel.appendChild(toggleInput);
-  toggleLabel.appendChild(toggleText);
+  // -- Deploy Button (prominent) --
   const redeployBtn = document.createElement("button");
-  redeployBtn.textContent = "↑ Deploy";
-  redeployBtn.title = "Re-deploy comfyapp.py to Modal";
-  redeployBtn.style.cssText = btnStyle() + "flex-shrink:0;";
+  redeployBtn.textContent = "Deploy to Cloud";
+  redeployBtn.title = "Deploy or re-deploy comfyapp.py to Modal";
+  redeployBtn.style.cssText = btnStyle("primary");
   redeployBtn.onclick = async () => {
     redeployBtn.disabled = true;
+    redeployBtn.textContent = "Deploying...";
     try {
       await api.fetchApi(`${MODAL_PREFIX}/deploy`, { method: "POST" });
       startDeployPoll();
+      showToast("Deploy started", "success");
     } catch (e) {
       setDeployBanner("error", e.message);
     }
-    setTimeout(() => { redeployBtn.disabled = false; }, 3000);
+    setTimeout(() => {
+      redeployBtn.disabled = false;
+      redeployBtn.textContent = "Deploy to Cloud";
+    }, 3000);
   };
+  stickyTop.appendChild(redeployBtn);
 
-  const reimportKeyBtn = document.createElement("button");
-  reimportKeyBtn.textContent = "🔑 API Key";
-  reimportKeyBtn.title = "Re-enter Modal API key";
-  reimportKeyBtn.style.cssText = btnStyle() + "flex-shrink:0;";
-  reimportKeyBtn.onclick = () => {
-    const container = panel.parentElement;
-    if (!container) return;
-    container.innerHTML = "";
-    container.appendChild(buildAuthPanel(() => {
-      container.innerHTML = "";
-      container.appendChild(buildPanel());
-      startDeployPoll();
-    }));
-  };
+  // -- Run Mode Toggle --
+  const modeSection = document.createElement("div");
+  modeSection.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
 
-  headerRow.appendChild(title);
-  headerRow.appendChild(reimportKeyBtn);
-  headerRow.appendChild(redeployBtn);
-  headerRow.appendChild(toggleLabel);
-  panel.appendChild(headerRow);
+  const modeLabel = document.createElement("div");
+  modeLabel.style.cssText = "font-size: 12px; color: #aaa; font-weight: 600;";
+  modeLabel.textContent = "Run on:";
 
-  deployBannerEl = document.createElement("div");
-  deployBannerEl.style.cssText = "font-size:11px; padding:5px 8px; border-radius:4px; background:#1a1a1a; flex-shrink:0; display:none; line-height:1.4;";
-  deployBannerTextEl = document.createElement("span");
-  deployBannerEl.appendChild(deployBannerTextEl);
-  panel.appendChild(deployBannerEl);
+  const modeToggle = document.createElement("div");
+  modeToggle.style.cssText = "display: flex; border-radius: 6px; overflow: hidden; border: 1px solid #444;";
+
+  const savedEnabled = localStorage.getItem(STORAGE_KEY_ENABLED);
+  let isCloudMode = savedEnabled === null ? true : savedEnabled === "true";
+
+  const cloudBtn = document.createElement("button");
+  cloudBtn.textContent = "Cloud (Modal GPU)";
+  cloudBtn.style.cssText = segmentBtnStyle(isCloudMode);
+
+  const localBtn = document.createElement("button");
+  localBtn.textContent = "Local (this PC)";
+  localBtn.style.cssText = segmentBtnStyle(!isCloudMode);
+
+  function updateModeToggle(cloud) {
+    isCloudMode = cloud;
+    cloudBtn.style.cssText = segmentBtnStyle(cloud);
+    localBtn.style.cssText = segmentBtnStyle(!cloud);
+    localStorage.setItem(STORAGE_KEY_ENABLED, String(cloud));
+    window._comfyModalEnabled = cloud;
+    updateModalSections(cloud);
+  }
+
+  cloudBtn.onclick = () => updateModeToggle(true);
+  localBtn.onclick = () => updateModeToggle(false);
+
+  modeToggle.appendChild(cloudBtn);
+  modeToggle.appendChild(localBtn);
+
+  const modeHint = document.createElement("div");
+  modeHint.style.cssText = "font-size: 11px; color: #666; line-height: 1.4;";
+  modeHint.textContent = "Cloud mode sends generations to Modal. Local mode runs on your machine.";
+
+  modeSection.appendChild(modeLabel);
+  modeSection.appendChild(modeToggle);
+  modeSection.appendChild(modeHint);
+  stickyTop.appendChild(modeSection);
+
+  // Divider
+  const topDivider = document.createElement("div");
+  topDivider.style.cssText = "border-top: 1px solid #3a3a3a; margin-top: 4px;";
+  stickyTop.appendChild(topDivider);
+
+  panel.appendChild(stickyTop);
+
+  // === SCROLLABLE CONTENT AREA ===
+  const scrollContent = document.createElement("div");
+  scrollContent.style.cssText = "flex: 1; overflow-y: auto; min-height: 0; padding: 10px 16px 16px; display: flex; flex-direction: column; gap: 16px;";
+
+  // -- GPU Selector --
+  const gpuSection = document.createElement("div");
+  gpuSection.style.cssText = "display:flex; flex-direction:column; gap:6px;";
 
   const gpuRow = document.createElement("div");
-  gpuRow.style.cssText = "display:flex; align-items:center; gap:8px; flex-shrink:0;";
+  gpuRow.style.cssText = "display:flex; align-items:center; gap:8px;";
 
   const gpuLabel = document.createElement("span");
-  gpuLabel.style.cssText = "font-size:12px; color:#aaa; flex-shrink:0;";
+  gpuLabel.style.cssText = "font-size:12px; color:#aaa; font-weight:600; flex-shrink:0;";
   gpuLabel.textContent = "GPU";
 
   const gpuSelect = document.createElement("select");
@@ -571,95 +797,111 @@ function buildPanel() {
 
   gpuRow.appendChild(gpuLabel);
   gpuRow.appendChild(gpuSelect);
+  gpuSection.appendChild(gpuRow);
+
+  const gpuHint = document.createElement("div");
+  gpuHint.style.cssText = "font-size: 11px; color: #666; line-height: 1.4;";
+  gpuHint.textContent = "You only pay while generating. Container shuts down when idle.";
+  gpuSection.appendChild(gpuHint);
+
+  // -- Status row --
+  const statusRow = document.createElement("div");
+  statusRow.style.cssText = "display:flex; align-items:center; gap:8px;";
 
   dotEl = document.createElement("span");
   dotEl.style.cssText = "width:9px; height:9px; border-radius:50%; background:#888; display:inline-block; flex-shrink:0;";
   statusEl = document.createElement("span");
-  statusEl.style.cssText = "font-size:11px; color:#888; flex-shrink:0;";
-  statusEl.textContent = "Not checked";
+  statusEl.style.cssText = "font-size:11px; color:#888; flex:1;";
+  statusEl.textContent = "Unknown";
 
   const checkBtn = document.createElement("button");
-  checkBtn.textContent = "Check";
-  checkBtn.title = "Check if Modal app is deployed (instant)";
+  checkBtn.textContent = "Check Status";
+  checkBtn.title = "Verify your Modal app is deployed and ready";
   checkBtn.style.cssText = btnStyle();
   checkBtn.onclick = () => checkHealth(false);
 
   const pingBtn = document.createElement("button");
-  pingBtn.textContent = "Ping";
-  pingBtn.title = "Wake up Modal container and confirm it's alive (may take 1-3 min on cold start)";
+  pingBtn.textContent = "Wake Up";
+  pingBtn.title = "Start the GPU container (takes 1-3 min on first use)";
   pingBtn.style.cssText = btnStyle();
   pingBtn.onclick = async () => {
     pingBtn.disabled = true;
-    pingBtn.textContent = "Pinging...";
+    pingBtn.textContent = "Waking...";
     await checkHealth(true);
     pingBtn.disabled = false;
-    pingBtn.textContent = "Ping";
+    pingBtn.textContent = "Wake Up";
   };
 
-  gpuRow.appendChild(dotEl);
-  gpuRow.appendChild(statusEl);
-  gpuRow.appendChild(checkBtn);
-  gpuRow.appendChild(pingBtn);
-  panel.appendChild(gpuRow);
+  statusRow.appendChild(dotEl);
+  statusRow.appendChild(statusEl);
+  statusRow.appendChild(checkBtn);
+  statusRow.appendChild(pingBtn);
+  gpuSection.appendChild(statusRow);
 
-  const hr = document.createElement("div");
-  hr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
-  panel.appendChild(hr);
+  scrollContent.appendChild(gpuSection);
 
-  const modalSections = document.createElement("div");
-  modalSections.style.cssText = "display:flex; flex-direction:column; gap:10px; flex:1; overflow:hidden; min-height:0;";
+  // === CUSTOM NODES SECTION (Collapsible) ===
+  const cnCollapsible = createCollapsibleSection("Custom Nodes", { defaultOpen: false, badge: "0" });
+  const cnContent = cnCollapsible.content;
 
-  // --- Custom Nodes Section ---
-  const customNodesSection = document.createElement("div");
-  customNodesSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
-
-  const cnHeader = document.createElement("div");
-  cnHeader.style.cssText = "display:flex; align-items:center; gap:6px; flex-shrink:0;";
-
-  const cnTitle = document.createElement("span");
-  cnTitle.style.cssText = "font-weight:600; font-size:13px; flex:1;";
-  cnTitle.textContent = "Custom Nodes";
-
-  const cnRefreshBtn = document.createElement("button");
-  cnRefreshBtn.textContent = "↺";
-  cnRefreshBtn.title = "Refresh custom nodes list";
-  cnRefreshBtn.style.cssText = btnStyle();
-  cnRefreshBtn.onclick = () => loadCustomNodes();
-
-  cnHeader.appendChild(cnTitle);
-  cnHeader.appendChild(cnRefreshBtn);
-  customNodesSection.appendChild(cnHeader);
+  const cnHelp = document.createElement("div");
+  cnHelp.style.cssText = "font-size: 11px; color: #888; line-height: 1.5; margin-bottom: 8px;";
+  cnHelp.textContent = "Add ComfyUI custom node repositories. These are installed in the cloud environment during deploy.";
+  cnContent.appendChild(cnHelp);
 
   const cnListEl = document.createElement("div");
-  cnListEl.style.cssText = "max-height:120px; overflow-y:auto;";
-  customNodesSection.appendChild(cnListEl);
+  cnListEl.style.cssText = "max-height:150px; overflow-y:auto;";
+  cnContent.appendChild(cnListEl);
 
   const cnNotice = document.createElement("div");
-  cnNotice.style.cssText = "font-size:11px; color:#f5a623; display:none;";
-  cnNotice.textContent = "Click Deploy to apply changes.";
-  customNodesSection.appendChild(cnNotice);
+  cnNotice.style.cssText = `
+    font-size: 11px; color: #f5a623; background: #3d2e00; border-radius: 4px;
+    padding: 6px 10px; margin-top: 6px; display: none;
+    display: none; align-items: center; gap: 8px;
+  `;
+  const cnNoticeText = document.createElement("span");
+  cnNoticeText.style.cssText = "flex: 1;";
+  cnNoticeText.textContent = "Deploy required - new custom nodes will be installed on next deploy";
+  const cnNoticeDeployBtn = document.createElement("button");
+  cnNoticeDeployBtn.textContent = "Deploy Now";
+  cnNoticeDeployBtn.style.cssText = "background:#f5a623; border:none; color:#111; padding:3px 8px; border-radius:3px; cursor:pointer; font-size:11px; font-weight:600; flex-shrink:0;";
+  cnNoticeDeployBtn.onclick = () => redeployBtn.click();
+  cnNotice.appendChild(cnNoticeText);
+  cnNotice.appendChild(cnNoticeDeployBtn);
+  cnContent.appendChild(cnNotice);
 
   const cnInputRow = document.createElement("div");
-  cnInputRow.style.cssText = "display:flex; gap:6px;";
+  cnInputRow.style.cssText = "display:flex; gap:6px; margin-top:8px;";
 
   const cnInput = document.createElement("input");
   cnInput.type = "text";
-  cnInput.placeholder = "https://github.com/user/comfyui-node";
+  cnInput.placeholder = "e.g. https://github.com/ltdrdata/ComfyUI-Manager";
   cnInput.style.cssText = inputStyle() + "flex:1;";
 
   const cnAddBtn = document.createElement("button");
   cnAddBtn.textContent = "Add";
   cnAddBtn.style.cssText = btnStyle();
 
+  const cnRefreshBtn = document.createElement("button");
+  cnRefreshBtn.textContent = "\u21BA";
+  cnRefreshBtn.title = "Refresh custom nodes list";
+  cnRefreshBtn.style.cssText = btnStyle();
+  cnRefreshBtn.onclick = () => loadCustomNodes();
+
   cnInputRow.appendChild(cnInput);
   cnInputRow.appendChild(cnAddBtn);
-  customNodesSection.appendChild(cnInputRow);
+  cnInputRow.appendChild(cnRefreshBtn);
+  cnContent.appendChild(cnInputRow);
 
   let cnInstallStatus = {};
   let cnStatusLoaded = false;
 
   function renderCustomNodesList(nodes) {
     cnListEl.innerHTML = "";
+    cnCollapsible.updateBadge(nodes ? nodes.length : 0);
+    if (nodes && nodes.length > 0) {
+      cnCollapsible.open();
+    }
     if (!nodes || nodes.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "font-size:11px; color:#666; padding:4px 0;";
@@ -725,7 +967,9 @@ function buildPanel() {
           const data = await r.json();
           if (data.status === "ok") {
             renderCustomNodesList(data.nodes);
-            cnNotice.style.display = "block";
+            cnNotice.style.display = "flex";
+            _hasChanges = true;
+            updateStatusBanner();
           }
         } catch (e) {
           removeBtn.disabled = false;
@@ -736,6 +980,7 @@ function buildPanel() {
       row.appendChild(removeBtn);
       cnListEl.appendChild(row);
     }
+    cnCollapsible.refreshHeight();
   }
 
   async function loadCustomNodes() {
@@ -745,7 +990,11 @@ function buildPanel() {
       const data = await resp.json();
       renderCustomNodesList(data.nodes || []);
     } catch (e) {
-      cnListEl.innerHTML = `<div style="color:#e05;font-size:11px;">Error: ${e.message}</div>`;
+      cnListEl.innerHTML = "";
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "color:#e05;font-size:11px;";
+      errDiv.textContent = "Error: " + e.message;
+      cnListEl.appendChild(errDiv);
     }
     // Try to load install status
     try {
@@ -786,7 +1035,10 @@ function buildPanel() {
       if (data.status === "ok") {
         renderCustomNodesList(data.nodes);
         cnInput.value = "";
-        cnNotice.style.display = "block";
+        cnNotice.style.display = "flex";
+        _hasChanges = true;
+        updateStatusBanner();
+        showToast("Custom node added!", "success");
       } else {
         cnInput.style.borderColor = "#e05";
       }
@@ -798,46 +1050,38 @@ function buildPanel() {
 
   cnInput.addEventListener("keydown", (e) => { if (e.key === "Enter") cnAddBtn.click(); });
 
-  modalSections.appendChild(customNodesSection);
+  scrollContent.appendChild(cnCollapsible.wrapper);
 
-  const cnHr = document.createElement("div");
-  cnHr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
-  modalSections.appendChild(cnHr);
-
-  // --- Models Section ---
-
-  const modelsSection = document.createElement("div");
-  modelsSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex:1; overflow:hidden; min-height:0;";
-
-  const listHeader = document.createElement("div");
-  listHeader.style.cssText = "display:flex; align-items:center; gap:6px; flex-shrink:0;";
-
-  const listTitle = document.createElement("span");
-  listTitle.style.cssText = "font-weight:600; font-size:13px; flex:1;";
-  listTitle.textContent = "Models";
-
-  const refreshBtn = document.createElement("button");
-  refreshBtn.textContent = "↺ Refresh";
-  refreshBtn.style.cssText = btnStyle();
-  refreshBtn.onclick = loadModels;
-
-  listHeader.appendChild(listTitle);
-  listHeader.appendChild(refreshBtn);
-  modelsSection.appendChild(listHeader);
+  // === MODELS SECTION (Collapsible, default open) ===
+  const modelsCollapsible = createCollapsibleSection("Models", { defaultOpen: true, badge: "..." });
+  modelsCollapsibleRef = modelsCollapsible;
+  const modelsContent = modelsCollapsible.content;
 
   modelListEl = document.createElement("div");
-  modelListEl.style.cssText = "flex:1; overflow-y:auto; min-height:0;";
-  modelsSection.appendChild(modelListEl);
+  modelListEl.style.cssText = "max-height: 300px; overflow-y: auto; min-height: 0;";
+  modelsContent.appendChild(modelListEl);
 
-  modalSections.appendChild(modelsSection);
+  const refreshBtn = document.createElement("button");
+  refreshBtn.textContent = "\u21BA Refresh";
+  refreshBtn.style.cssText = btnStyle() + "margin-top:8px;";
+  refreshBtn.onclick = loadModels;
+  modelsContent.appendChild(refreshBtn);
 
+  scrollContent.appendChild(modelsCollapsible.wrapper);
+
+  // === ADD MODEL SECTION ===
   const addSection = document.createElement("div");
-  addSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0; border-top:1px solid #3a3a3a; padding-top:10px;";
+  addSection.style.cssText = "display:flex; flex-direction:column; gap:8px; background:#1e1e2e; border-radius:6px; padding:10px;";
 
   const addTitle = document.createElement("div");
   addTitle.style.cssText = "font-weight:600; font-size:13px;";
   addTitle.textContent = "Add Model";
   addSection.appendChild(addTitle);
+
+  const addHelp = document.createElement("div");
+  addHelp.style.cssText = "font-size:11px; color:#888; line-height:1.4;";
+  addHelp.textContent = "Download models to the Modal cloud volume. Use batch mode to download multiple models at once.";
+  addSection.appendChild(addHelp);
 
   const urlInput = document.createElement("input");
   urlInput.type = "text";
@@ -866,10 +1110,18 @@ function buildPanel() {
   row2.appendChild(filenameInput);
   addSection.appendChild(row2);
 
-  const addToQueueBtn = document.createElement("button");
-  addToQueueBtn.textContent = "+ Add to Queue";
-  addToQueueBtn.style.cssText = btnStyle();
-  addToQueueBtn.style.width = "100%";
+  // Auto-detect filename on URL input (debounced)
+  const autoDetectFilename = debounce(() => {
+    const url = urlInput.value.trim();
+    if (!url || filenameInput.value.trim()) return;
+    try {
+      const parts = new URL(url).pathname.split("/");
+      const name = parts.filter(Boolean).pop() || "";
+      if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
+    } catch {}
+  }, 600);
+
+  urlInput.addEventListener("input", autoDetectFilename);
   urlInput.addEventListener("blur", () => {
     const url = urlInput.value.trim();
     if (!url || filenameInput.value.trim()) return;
@@ -880,6 +1132,63 @@ function buildPanel() {
     } catch {}
   });
 
+  // Buttons row: Download (single) + Add to Batch
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex; gap:6px;";
+
+  const singleDownloadBtn = document.createElement("button");
+  singleDownloadBtn.textContent = "Download";
+  singleDownloadBtn.title = "Download this single model immediately";
+  singleDownloadBtn.style.cssText = btnStyle("primary") + "flex:1;";
+  singleDownloadBtn.onclick = async () => {
+    let url = urlInput.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+    if (!filenameInput.value.trim()) {
+      try {
+        const parts = new URL(url).pathname.split("/");
+        const name = parts.filter(Boolean).pop() || "";
+        if (name.includes(".")) filenameInput.value = decodeURIComponent(name);
+      } catch {}
+    }
+    const filename = filenameInput.value.trim();
+    const folder = folderSelect.value;
+    if (!filename) return;
+
+    singleDownloadBtn.disabled = true;
+    singleDownloadBtn.textContent = "Downloading...";
+    try {
+      const resp = await api.fetchApi(`${MODAL_PREFIX}/models/batch-install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [{ url, filename, save_path: folder }] }),
+      });
+      const data = await resp.json();
+      if (data.status === "ok") {
+        showToast("Model downloaded!", "success");
+        // Auto-inject
+        await api.fetchApi(`${MODAL_PREFIX}/models/inject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder, filename }),
+        }).catch(() => {});
+        urlInput.value = "";
+        filenameInput.value = "";
+        await loadModels();
+      } else {
+        throw new Error(data.message || "Download failed");
+      }
+    } catch (e) {
+      showToast("Error: " + e.message, "error");
+    }
+    singleDownloadBtn.disabled = false;
+    singleDownloadBtn.textContent = "Download";
+  };
+
+  const addToQueueBtn = document.createElement("button");
+  addToQueueBtn.textContent = "+ Add to Batch";
+  addToQueueBtn.title = "Add to batch download queue";
+  addToQueueBtn.style.cssText = btnStyle() + "flex:1;";
   addToQueueBtn.onclick = () => {
     let url = urlInput.value.trim();
     if (!url) return;
@@ -901,17 +1210,21 @@ function buildPanel() {
     urlInput.value = "";
     filenameInput.value = "";
     syncDownloadAllBtn();
+    showToast("Added to batch", "info");
   };
 
-  const enterSubmit = (e) => { if (e.key === "Enter") addToQueueBtn.click(); };
+  const enterSubmit = (e) => { if (e.key === "Enter") singleDownloadBtn.click(); };
   urlInput.addEventListener("keydown", enterSubmit);
   filenameInput.addEventListener("keydown", enterSubmit);
 
-  addSection.appendChild(addToQueueBtn);
+  btnRow.appendChild(singleDownloadBtn);
+  btnRow.appendChild(addToQueueBtn);
+  addSection.appendChild(btnRow);
 
+  // Queue area
   const queueHeader = document.createElement("div");
-  queueHeader.style.cssText = "font-size:11px; font-weight:600; color:#aaa; text-transform:uppercase; letter-spacing:0.05em;";
-  queueHeader.textContent = "Queue";
+  queueHeader.style.cssText = "font-size:11px; font-weight:600; color:#aaa; text-transform:uppercase; letter-spacing:0.05em; margin-top:4px;";
+  queueHeader.textContent = "Batch Queue";
   addSection.appendChild(queueHeader);
 
   queueListEl = document.createElement("div");
@@ -923,7 +1236,7 @@ function buildPanel() {
   addSection.appendChild(batchStatusEl);
 
   downloadAllBtn = document.createElement("button");
-  downloadAllBtn.textContent = "⬇ Download";
+  downloadAllBtn.textContent = "\u2B07 Download Batch";
   downloadAllBtn.disabled = true;
   downloadAllBtn.style.cssText = btnStyle("primary");
   downloadAllBtn.onclick = async () => {
@@ -937,7 +1250,7 @@ function buildPanel() {
     pending.forEach(e => {
       e.state = "running";
       if (e.statusEl) {
-        e.statusEl.textContent = "⏳ downloading...";
+        e.statusEl.textContent = "\u23F3 downloading...";
         e.statusEl.style.color = "#f5a623";
       }
       if (e.removeBtn) e.removeBtn.disabled = true;
@@ -960,7 +1273,7 @@ function buildPanel() {
           if (!entry) return;
           entry.state = "done";
           if (entry.statusEl) {
-            entry.statusEl.textContent = res.skipped ? "✓ already exists" : "✓ done";
+            entry.statusEl.textContent = res.skipped ? "\u2713 already exists" : "\u2713 done";
             entry.statusEl.style.color = "#7ed321";
           }
           injectPromises.push(
@@ -973,7 +1286,8 @@ function buildPanel() {
         });
         await Promise.all(injectPromises);
         batchStatusEl.style.color = "#7ed321";
-        batchStatusEl.textContent = `Done — ${pending.length} model(s) downloaded.`;
+        batchStatusEl.textContent = `Done - ${pending.length} model(s) downloaded.`;
+        showToast(`${pending.length} model(s) downloaded!`, "success");
         await loadModels();
       } else {
         throw new Error(data.message || "Unknown error");
@@ -983,7 +1297,7 @@ function buildPanel() {
         if (entry.state !== "done") {
           entry.state = "queued";
           if (entry.statusEl) {
-            entry.statusEl.textContent = "✗ failed — re-queued";
+            entry.statusEl.textContent = "\u2717 failed - re-queued";
             entry.statusEl.style.color = "#e05";
           }
           if (entry.removeBtn) entry.removeBtn.disabled = false;
@@ -997,30 +1311,24 @@ function buildPanel() {
   };
   addSection.appendChild(downloadAllBtn);
 
-  modalSections.appendChild(addSection);
-  panel.appendChild(modalSections);
+  scrollContent.appendChild(addSection);
 
-  const localNotice = document.createElement("div");
-  localNotice.style.cssText = "font-size:12px; color:#888; line-height:1.5; flex-shrink:0; display:none;";
-  localNotice.textContent = "Local mode: prompts go directly to ComfyUI. GPU routing is off.";
-  panel.appendChild(localNotice);
+  // === SETTINGS SECTION (Collapsible, at bottom) ===
+  const settingsCollapsible = createCollapsibleSection("Settings", { defaultOpen: false, badge: null });
+  settingsCollapsible.wrapper.querySelector("span:last-of-type").style.display = "none"; // hide badge for settings
 
-  const hfHr = document.createElement("div");
-  hfHr.style.cssText = "border-top: 1px solid #3a3a3a; flex-shrink:0;";
-  panel.appendChild(hfHr);
+  const settingsContent = settingsCollapsible.content;
 
-  const hfSection = document.createElement("div");
-  hfSection.style.cssText = "display:flex; flex-direction:column; gap:6px; flex-shrink:0;";
-
+  // -- HuggingFace Token --
   const hfTitle = document.createElement("div");
-  hfTitle.style.cssText = "font-weight:600; font-size:13px;";
-  hfTitle.textContent = "🤗 HuggingFace API Key";
-  hfSection.appendChild(hfTitle);
+  hfTitle.style.cssText = "font-weight:600; font-size:12px; margin-bottom:4px;";
+  hfTitle.textContent = "\uD83E\uDD17 HuggingFace Token";
+  settingsContent.appendChild(hfTitle);
 
   const hfDesc = document.createElement("div");
-  hfDesc.style.cssText = "font-size:11px; color:#888; line-height:1.5;";
-  hfDesc.textContent = "Required for downloading gated models. Saved locally.";
-  hfSection.appendChild(hfDesc);
+  hfDesc.style.cssText = "font-size:11px; color:#888; line-height:1.5; margin-bottom:6px;";
+  hfDesc.innerHTML = `Required only for gated/private models on HuggingFace (e.g., Flux, SDXL Turbo). Get your token at <a href="https://huggingface.co/settings/tokens" target="_blank" style="color:#6a9fd8;">huggingface.co/settings/tokens</a>`;
+  settingsContent.appendChild(hfDesc);
 
   const hfRow = document.createElement("div");
   hfRow.style.cssText = "display:flex; gap:6px;";
@@ -1036,19 +1344,27 @@ function buildPanel() {
 
   hfRow.appendChild(hfInput);
   hfRow.appendChild(hfSaveBtn);
-  hfSection.appendChild(hfRow);
+  settingsContent.appendChild(hfRow);
 
   const hfStatus = document.createElement("div");
-  hfStatus.style.cssText = "font-size:11px; color:#888; min-height:14px;";
-  hfSection.appendChild(hfStatus);
-
-  panel.appendChild(hfSection);
+  hfStatus.style.cssText = "font-size:11px; color:#888; min-height:14px; margin-top:4px;";
+  settingsContent.appendChild(hfStatus);
 
   (async () => {
     try {
       const r = await api.fetchApi(`${MODAL_PREFIX}/hf-token`);
       const d = await r.json();
-      if (d.token) hfStatus.textContent = `Saved: ${d.token}`;
+      if (d.token) {
+        hfStatus.innerHTML = "";
+        const badge = document.createElement("span");
+        badge.style.cssText = "color:#7ed321; background:#1a3a1a; padding:2px 6px; border-radius:3px; font-size:10px;";
+        badge.textContent = "Saved";
+        const tokenSpan = document.createElement("span");
+        tokenSpan.style.cssText = "color:#666; margin-left:6px;";
+        tokenSpan.textContent = d.token;
+        hfStatus.appendChild(badge);
+        hfStatus.appendChild(tokenSpan);
+      }
     } catch {}
   })();
 
@@ -1064,9 +1380,11 @@ function buildPanel() {
       });
       const d = await r.json();
       if (d.status === "ok") {
-        hfStatus.style.color = "#5c9";
-        hfStatus.textContent = token ? "Saved ✓" : "Cleared";
+        hfStatus.innerHTML = token
+          ? `<span style="color:#7ed321; background:#1a3a1a; padding:2px 6px; border-radius:3px; font-size:10px;">Saved</span>`
+          : `<span style="color:#888;">Cleared</span>`;
         hfInput.value = "";
+        showToast(token ? "Token saved" : "Token cleared", "success");
       } else {
         hfStatus.style.color = "#e05";
         hfStatus.textContent = d.message || "Error saving token.";
@@ -1079,16 +1397,60 @@ function buildPanel() {
   };
   hfInput.addEventListener("keydown", (e) => { if (e.key === "Enter") hfSaveBtn.click(); });
 
+  // -- Change API Key --
+  const keyDivider = document.createElement("div");
+  keyDivider.style.cssText = "border-top: 1px solid #3a3a3a; margin: 10px 0;";
+  settingsContent.appendChild(keyDivider);
+
+  const reimportKeyBtn = document.createElement("button");
+  reimportKeyBtn.textContent = "\uD83D\uDD11 Change API Key";
+  reimportKeyBtn.title = "Re-enter Modal API key";
+  reimportKeyBtn.style.cssText = btnStyle() + "width: 100%;";
+  reimportKeyBtn.onclick = () => {
+    const container = panel.parentElement;
+    if (!container) return;
+    container.innerHTML = "";
+    container.appendChild(buildAuthPanel(() => {
+      container.innerHTML = "";
+      container.appendChild(buildPanel());
+      startDeployPoll();
+    }));
+  };
+  settingsContent.appendChild(reimportKeyBtn);
+
+  scrollContent.appendChild(settingsCollapsible.wrapper);
+
+  // === LOCAL MODE NOTICE ===
+  const localNotice = document.createElement("div");
+  localNotice.style.cssText = "font-size:12px; color:#888; line-height:1.5; padding:12px; background:#1e1e2e; border-radius:6px; display:none; text-align:center;";
+  localNotice.textContent = "Local mode: prompts go directly to ComfyUI. GPU routing is off.";
+  scrollContent.appendChild(localNotice);
+
+  panel.appendChild(scrollContent);
+
+  // === Gear button opens settings section ===
+  gearBtn.onclick = () => {
+    settingsCollapsible.open();
+    settingsCollapsible.wrapper.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  // === Modal sections toggle ===
+  const modalSectionElements = [gpuSection, cnCollapsible.wrapper, modelsCollapsible.wrapper, addSection];
+
   function updateModalSections(enabled) {
-    modalSections.style.display = enabled ? "flex" : "none";
+    for (const el of modalSectionElements) {
+      el.style.display = enabled ? "" : "none";
+    }
     localNotice.style.display = enabled ? "none" : "block";
     gpuSelect.disabled = !enabled;
     checkBtn.disabled = !enabled;
+    redeployBtn.disabled = !enabled;
   }
 
-  updateModalSections(toggleInput.checked);
-  window._comfyModalEnabled = toggleInput.checked;
+  updateModalSections(isCloudMode);
+  window._comfyModalEnabled = isCloudMode;
 
+  // Sync GPU config on load
   (async () => {
     try {
       await api.fetchApi(`${MODAL_PREFIX}/config`, {
@@ -1106,12 +1468,26 @@ function buildPanel() {
   return panel;
 }
 
+// --- Style helpers ---
+function segmentBtnStyle(active) {
+  if (active) {
+    return `
+      flex: 1; padding: 7px 0; border: none; cursor: pointer; font-size: 12px; font-weight: 600;
+      background: #3a6fcc; color: #fff; transition: background 0.2s;
+    `;
+  }
+  return `
+    flex: 1; padding: 7px 0; border: none; cursor: pointer; font-size: 12px;
+    background: #2a2a2a; color: #888; transition: background 0.2s;
+  `;
+}
+
 function btnStyle(variant) {
   if (variant === "primary") {
     return `
       background: #3a6fcc; border: 1px solid #4a7fe0; color: #fff;
-      padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
-      width: 100%;
+      padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+      width: 100%; font-weight: 600;
     `;
   }
   return `
@@ -1128,6 +1504,7 @@ function inputStyle() {
   `;
 }
 
+// --- Extension Registration ---
 app.registerExtension({
   name: "comfyui.modal.settings",
 
