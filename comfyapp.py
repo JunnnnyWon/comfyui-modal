@@ -74,11 +74,16 @@ if CUSTOM_NODE_URLS:
     for _url in CUSTOM_NODE_URLS:
         _repo_name = _url.rstrip('/').split('/')[-1].replace('.git', '')
         _install_commands.append(
-            f"echo 'Installing {_repo_name}...' && "
-            f"(comfy node install {_url} || "
-            f"(git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
+            f"(echo '=== Installing {_repo_name} ===' && "
+            f"git clone {_url} /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
             f"cd /root/comfy/ComfyUI/custom_nodes/{_repo_name} && "
-            f"([ -f requirements.txt ] && pip install -r requirements.txt || true))) || true"
+            f"([ -f requirements.txt ] && "
+            f"pip install -r requirements.txt --no-deps 2>/dev/null; "
+            f"pip install -r requirements.txt --ignore-installed 2>&1 | "
+            f"grep -v 'already satisfied' || true) && "
+            f"([ -f install.py ] && python install.py || true) && "
+            f"echo '=== {_repo_name} done ===') || "
+            f"echo '=== {_repo_name} FAILED ==='"
         )
     image = image.run_commands(*_install_commands, gpu="a10g")
 
