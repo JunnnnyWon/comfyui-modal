@@ -9,6 +9,10 @@ _apis = {
 }
 _download_fn = modal.Function.from_name("comfyui", "download_model_to_volume")
 _batch_download_fn = modal.Function.from_name("comfyui", "batch_download_models")
+_sync_custom_nodes_fn = modal.Function.from_name("comfyui", "sync_custom_nodes_to_volume")
+_get_volume_status_fn = modal.Function.from_name("comfyui", "get_volume_status")
+_upload_model_fn = modal.Function.from_name("comfyui", "upload_model_to_volume")
+_upload_model_chunk_fn = modal.Function.from_name("comfyui", "upload_model_chunk")
 
 _current_gpu = "a10g"
 _api_instances = {}
@@ -102,5 +106,28 @@ async def delete_model(folder: str, filename: str) -> dict:
 
 
 @_modal_error_handler
-async def get_custom_node_status() -> list:
-    return await asyncio.to_thread(lambda: _api().custom_node_status.remote())
+async def sync_custom_nodes(archive_data: bytes) -> dict:
+    return await asyncio.to_thread(
+        lambda: _sync_custom_nodes_fn.remote(archive_data),
+    )
+
+
+@_modal_error_handler
+async def get_sync_status() -> dict:
+    return await asyncio.to_thread(
+        lambda: _get_volume_status_fn.remote(),
+    )
+
+
+@_modal_error_handler
+async def upload_model_to_volume(file_data: bytes, folder: str, filename: str) -> dict:
+    return await asyncio.to_thread(
+        lambda: _upload_model_fn.remote(file_data, folder, filename),
+    )
+
+
+@_modal_error_handler
+async def upload_model_chunk(chunk_data: bytes, folder: str, filename: str, offset: int, is_last: bool) -> dict:
+    return await asyncio.to_thread(
+        lambda: _upload_model_chunk_fn.remote(chunk_data, folder, filename, offset, is_last),
+    )
