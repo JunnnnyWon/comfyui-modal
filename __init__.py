@@ -3,6 +3,7 @@ import json
 import uuid
 import sys
 import os
+import re
 import base64
 import copy
 import threading
@@ -28,6 +29,7 @@ def _unique_path(directory: str, filename: str) -> str:
 _NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
+_CUSTOM_NODES_FILE = os.path.join(_NODE_DIR, ".custom_nodes.json")
 
 def _ensure_modal():
     try:
@@ -43,6 +45,19 @@ def _ensure_modal():
     print("[comfyui-modal] 'modal' installed successfully.")
 
 _ensure_modal()
+
+
+def _read_custom_nodes():
+    try:
+        with open(_CUSTOM_NODES_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _write_custom_nodes(nodes):
+    with open(_CUSTOM_NODES_FILE, "w") as f:
+        json.dump(nodes, f, indent=2)
 
 _deploy_status = {"state": "idle", "message": ""}
 
@@ -159,7 +174,7 @@ sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg
-    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu
+    from modal_client import run_prompt, get_object_info, health_check, download_model, batch_download_models, list_models, delete_model, set_gpu, get_gpu, get_custom_node_status
     _modal_available = True
     _maybe_auto_deploy()
 except ImportError:
@@ -173,6 +188,7 @@ except ImportError:
     def batch_download_models(*a, **kw): raise RuntimeError("modal not installed")
     def list_models(*a, **kw): raise RuntimeError("modal not installed")
     def delete_model(*a, **kw): raise RuntimeError("modal not installed")
+    def get_custom_node_status(*a, **kw): raise RuntimeError("modal not installed")
     def set_gpu(gpu): pass
     def get_gpu(): return "a10g"
 
@@ -568,4 +584,46 @@ if _server:
         except Exception as e:
             return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models")
+    @_server.routes.get("/comfymodal/custom-nodes")
+    async def modal_custom_nodes_get(request: web.Request) -> web.Response:
+        nodes = _read_custom_nodes()
+        return web.json_response({"nodes": nodes})
+
+    @_server.routes.post("/comfymodal/custom-nodes")
+    async def modal_custom_nodes_add(request: web.Request) -> web.Response:
+        body = await request.json()
+        url = body.get("url", "").strip()
+        if not url:
+            return web.json_response({"status": "error", "message": "url required"}, status=400)
+        if not url.startswith("http://") and not url.startswith("https://"):
+            return web.json_response({"status": "error", "message": "url must start with http:// or https://"}, status=400)
+        if not re.match(r'^https?://[a-zA-Z0-9._\-/~@:]+$', url):
+            return web.json_response({"status": "error", "message": "url contains invalid characters"}, status=400)
+        # Normalize: strip trailing slash and .git suffix
+        url = url.rstrip('/')
+        if url.endswith('.git'):
+            url = url[:-4]
+        nodes = _read_custom_nodes()
+        if url not in nodes:
+            nodes.append(url)
+            _write_custom_nodes(nodes)
+        return web.json_response({"status": "ok", "nodes": nodes})
+
+    @_server.routes.delete("/comfymodal/custom-nodes")
+    async def modal_custom_nodes_remove(request: web.Request) -> web.Response:
+        body = await request.json()
+        url = body.get("url", "").strip()
+        nodes = _read_custom_nodes()
+        nodes = [n for n in nodes if n != url]
+        _write_custom_nodes(nodes)
+        return web.json_response({"status": "ok", "nodes": nodes})
+
+    @_server.routes.get("/comfymodal/custom-nodes/status")
+    async def modal_custom_nodes_status(request: web.Request) -> web.Response:
+        try:
+            result = await get_custom_node_status()
+            return web.json_response({"status": "ok", "nodes": result})
+        except Exception as e:
+            return web.json_response({"status": "error", "message": str(e)}, status=503)
+
+    print("[comfyui-modal] Routes registered: /comfymodal/prompt, /comfymodal/model/install, /comfymodal/models/batch-install, /comfymodal/health, /comfymodal/object_info, /comfymodal/cancel/{id}, /comfymodal/models, /comfymodal/custom-nodes")
