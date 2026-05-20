@@ -174,7 +174,6 @@ async function showDeployLogOverlay() {
     width: 28px; height: 28px; border-radius: 4px; cursor: pointer;
     font-size: 14px; display: flex; align-items: center; justify-content: center;
   `;
-  closeBtn.onclick = () => overlay.remove();
 
   header.appendChild(title);
   header.appendChild(closeBtn);
@@ -195,19 +194,25 @@ async function showDeployLogOverlay() {
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
+  // Centralized close function to prevent listener leaks
+  function close() {
+    overlay.remove();
+    document.removeEventListener("keydown", escHandler);
+  }
+
   // Close on overlay background click
   overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) close();
   });
 
   // Close on Escape key
   const escHandler = (e) => {
-    if (e.key === "Escape") {
-      overlay.remove();
-      document.removeEventListener("keydown", escHandler);
-    }
+    if (e.key === "Escape") close();
   };
   document.addEventListener("keydown", escHandler);
+
+  // Close button
+  closeBtn.onclick = () => close();
 
   // Fetch the log
   try {

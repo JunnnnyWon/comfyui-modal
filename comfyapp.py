@@ -97,7 +97,7 @@ if CUSTOM_NODE_URLS:
         "    path = '/root/comfy/ComfyUI/custom_nodes/' + e['name']\n"
         "    if os.path.isdir(path):\n"
         "        error_msg = ''\n"
-        "        py_files = glob.glob(os.path.join(path, '*.py'))\n"
+        "        py_files = glob.glob(os.path.join(path, '**', '*.py'), recursive=True)[:20]\n"
         "        for pf in py_files:\n"
         "            try:\n"
         "                with open(pf, 'r') as f:\n"
