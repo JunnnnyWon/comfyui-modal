@@ -5,6 +5,8 @@ import json
 import uuid
 import modal
 
+from workflow_inputs import stage_remote_input_images
+
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
@@ -338,17 +340,13 @@ class _ComfyAPIMixin:
     def run_prompt(self, workflow: dict, input_images: dict = None) -> dict:
         import urllib.request
         import urllib.error
-        import base64
         from pathlib import Path
 
-        vol.reload()
-
         if input_images:
-            input_dir = Path("/root/comfy/ComfyUI/input")
-            input_dir.mkdir(parents=True, exist_ok=True)
-            for filename, b64data in input_images.items():
-                dest = input_dir / Path(filename).name
-                dest.write_bytes(base64.b64decode(b64data))
+            stage_remote_input_images(
+                Path("/root/comfy/ComfyUI/input"),
+                input_images,
+            )
 
         client_id = str(uuid.uuid4())
         payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
