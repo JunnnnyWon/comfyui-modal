@@ -9,7 +9,10 @@ import copy
 import threading
 import subprocess
 import time
+from pathlib import Path
 from aiohttp import web
+
+from workflow_inputs import prepare_local_workflow_inputs
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
@@ -330,34 +333,6 @@ async def _process_queue():
             _queue.task_done()
 
 
-def _collect_input_images(workflow: dict) -> dict:
-    images = {}
-    search_dirs = [
-        os.path.join(_COMFYUI_ROOT, "input"),
-        os.path.join(_COMFYUI_ROOT, "output"),
-    ]
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        class_type = node.get("class_type", "")
-        if not class_type.startswith("LoadImage"):
-            continue
-        filename = node.get("inputs", {}).get("image", "") or node.get("inputs", {}).get("mask", "")
-        if not filename or filename in images:
-            continue
-        if filename.startswith("http://") or filename.startswith("https://"):
-            continue
-        for d in search_dirs:
-            candidate = os.path.join(d, filename)
-            if os.path.isfile(candidate):
-                with open(candidate, "rb") as f:
-                    images[filename] = base64.b64encode(f.read()).decode()
-                break
-        else:
-            print(f"[comfyui-modal] Warning: input image not found locally: {filename}")
-    return images
-
-
 async def _execute_job(item: tuple, item_id: int):
     number, prompt_id, workflow, extra_data, _, _ = item
     sid = extra_data.get("client_id", "")
@@ -375,8 +350,13 @@ async def _execute_job(item: tuple, item_id: int):
     success = False
     outputs = {}
     try:
-        input_images = _collect_input_images(workflow)
-        result = await run_prompt(workflow, input_images)
+        prepared_inputs = prepare_local_workflow_inputs(
+            workflow,
+            Path(_COMFYUI_ROOT),
+        )
+        for missing_file in prepared_inputs.missing_files:
+            print(f"[comfyui-modal] Warning: input image not found locally: {missing_file}")
+        result = await run_prompt(prepared_inputs.workflow, prepared_inputs.input_images)
         success = True
     except asyncio.CancelledError:
         _send(sid, "execution_error", {"message": "cancelled", "prompt_id": prompt_id})
