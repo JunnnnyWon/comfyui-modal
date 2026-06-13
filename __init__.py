@@ -12,6 +12,10 @@ import time
 from pathlib import Path
 from aiohttp import web
 
+_NODE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _NODE_DIR not in sys.path:
+    sys.path.insert(0, _NODE_DIR)
+
 from workflow_inputs import prepare_local_workflow_inputs
 
 NODE_CLASS_MAPPINGS = {}
@@ -28,7 +32,6 @@ def _unique_path(directory: str, filename: str) -> str:
     return os.path.join(directory, f"{stem}_{suffix}{ext}")
 
 
-_NODE_DIR = os.path.dirname(os.path.abspath(__file__))
 _COMFYAPP_PATH = os.path.join(_NODE_DIR, "comfyapp.py")
 _DEPLOY_STATE_FILE = os.path.join(_NODE_DIR, ".deployed_version")
 _DEPLOY_LOG_FILE = os.path.join(_NODE_DIR, ".deploy_log")
@@ -216,8 +219,6 @@ except Exception as e:
     print(f"[comfyui-modal] Could not get PromptServer: {e}")
     _server = None
     execution = None
-
-sys.path.insert(0, _NODE_DIR)
 
 try:
     import modal as _modal_pkg

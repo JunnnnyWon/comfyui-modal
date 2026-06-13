@@ -3,7 +3,12 @@ import sys
 import time
 import json
 import uuid
+import os
 import modal
+
+_NODE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _NODE_DIR not in sys.path:
+    sys.path.insert(0, _NODE_DIR)
 
 from workflow_inputs import stage_remote_input_images
 
