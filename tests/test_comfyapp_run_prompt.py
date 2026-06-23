@@ -24,6 +24,9 @@ class _FakeImageBuilder:
     def run_commands(self, *_args: object, **_kwargs: object) -> "_FakeImageBuilder":
         return self
 
+    def add_local_python_source(self, *_args: object, **_kwargs: object) -> "_FakeImageBuilder":
+        return self
+
 
 class _FakeImage:
     @staticmethod

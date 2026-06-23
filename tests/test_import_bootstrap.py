@@ -75,6 +75,9 @@ def test_comfyapp_bootstraps_repo_path_before_importing_workflow_inputs() -> Non
         def run_commands(self, *_args: object, **_kwargs: object) -> "FakeImageBuilder":
             return self
 
+        def add_local_python_source(self, *_args: object, **_kwargs: object) -> "FakeImageBuilder":
+            return self
+
     class FakeImage:
         @staticmethod
         def debian_slim(*_args: object, **_kwargs: object) -> FakeImageBuilder:
