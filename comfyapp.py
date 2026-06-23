@@ -39,11 +39,11 @@ image = (
         "ffmpeg",
     )
     .pip_install("comfy-cli==1.3.7")
-    .add_local_python_source("workflow_inputs")
     .run_commands(
         "comfy --skip-prompt install --nvidia",
         gpu="a10g",
     )
+    .add_local_python_source("workflow_inputs")
 )
 
 download_image = (
