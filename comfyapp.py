@@ -15,7 +15,7 @@ from workflow_inputs import stage_remote_input_images
 # Bump this version whenever comfyapp.py changes.
 # The custom node compares this against the last deployed version
 # and re-runs `modal deploy` only when the version changes.
-COMFYAPP_VERSION = "2.0.1"
+COMFYAPP_VERSION = "2.0.2"
 
 APP_NAME = "comfyui"
 VOLUME_NAME = "comfyui-models"
@@ -303,10 +303,13 @@ class _ComfyAPIMixin:
                     # Install requirements if present
                     req_file = os.path.join(src, "requirements.txt")
                     if os.path.isfile(req_file):
-                        subprocess.run(
-                            [sys.executable, "-m", "pip", "install", "-r", req_file],
-                            capture_output=True, timeout=300
-                        )
+                        try:
+                            subprocess.run(
+                                [sys.executable, "-m", "pip", "install", "-r", req_file],
+                                capture_output=True, timeout=600
+                            )
+                        except Exception as e:
+                            print(f"[comfyui-modal] WARNING: Failed to install requirements for {node_dir}: {e}")
 
         self._proc = subprocess.Popen(
             ["comfy", "launch", "--", "--listen", "0.0.0.0",
